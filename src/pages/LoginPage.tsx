@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef } from 'react';
+import { useState, useCallback } from 'react';
 import { useNavigate, useLocation, Navigate } from 'react-router-dom';
 import {
   TextInput,
@@ -17,7 +17,7 @@ import {
 import { useForm } from '@mantine/form';
 import { IconMail, IconLock, IconAlertCircle } from '@tabler/icons-react';
 import { AxiosError } from 'axios';
-import { Turnstile, type BoundTurnstileObject } from 'react-turnstile';
+import { Turnstile } from 'react-turnstile';
 import { useAuth } from '../auth';
 import { API_CONFIG } from '../api/config';
 import type { ApiError } from '../types';
@@ -30,7 +30,7 @@ export function LoginPage() {
   const [serverError, setServerError] = useState<string | null>(null);
   const [turnstileToken, setTurnstileToken] = useState<string | null>(null);
   const [turnstileError, setTurnstileError] = useState<string | null>(null);
-  const turnstileRef = useRef<BoundTurnstileObject | null>(null);
+  const [turnstileInstanceKey, setTurnstileInstanceKey] = useState(0);
 
   const from = (location.state as { from?: { pathname: string } })?.from?.pathname || '/library';
 
@@ -55,8 +55,7 @@ export function LoginPage() {
     validateInputOnBlur: true,
   });
 
-  const handleTurnstileVerify = useCallback((token: string, bound: BoundTurnstileObject) => {
-    turnstileRef.current = bound;
+  const handleTurnstileVerify = useCallback((token: string) => {
     setTurnstileToken(token);
     setTurnstileError(null);
   }, []);
@@ -70,11 +69,7 @@ export function LoginPage() {
     setTurnstileToken(null);
   }, []);
 
-  if (isAuthenticated && !isBootstrapping) {
-    return <Navigate to={from} replace />;
-  }
-
-  const handleSubmit = async (values: { email: string; password: string; remember_me: boolean }) => {
+  const handleSubmit = useCallback(async (values: { email: string; password: string; remember_me: boolean }) => {
     if (!turnstileToken) {
       setServerError('Please complete the captcha verification.');
       return;
@@ -90,8 +85,8 @@ export function LoginPage() {
       });
       navigate(from, { replace: true });
     } catch (err) {
-      turnstileRef.current?.reset();
       setTurnstileToken(null);
+      setTurnstileInstanceKey((current) => current + 1);
 
       const axiosErr = err as AxiosError<ApiError>;
       const status = axiosErr.response?.status;
@@ -113,7 +108,11 @@ export function LoginPage() {
         setServerError('An unexpected error occurred. Please try again.');
       }
     }
-  };
+  }, [from, login, navigate, turnstileToken]);
+
+  if (isAuthenticated && !isBootstrapping) {
+    return <Navigate to={from} replace />;
+  }
 
   return (
     <Box
@@ -286,6 +285,7 @@ export function LoginPage() {
                   }}
                 >
                   <Turnstile
+                    key={turnstileInstanceKey}
                     sitekey={API_CONFIG.turnstileSiteKey}
                     onVerify={handleTurnstileVerify}
                     onError={handleTurnstileError}
@@ -319,9 +319,8 @@ export function LoginPage() {
           </Paper>
 
           <Text c="dimmed" size="xs" ta="center">
-            OpenStroid is an open-source cloud gaming client.
-            <br />
-            Your credentials are sent directly to the service provider.
+            OpenStroid uses a same-origin auth bridge. Browser sessions stay on OpenStroid,
+            while upstream tokens remain inside secure HttpOnly cookies.
           </Text>
         </Stack>
       </Center>

@@ -49,7 +49,13 @@ export function LibraryPage() {
   }, []);
 
   useEffect(() => {
-    fetchGames();
+    const timer = window.setTimeout(() => {
+      void fetchGames();
+    }, 0);
+
+    return () => {
+      window.clearTimeout(timer);
+    };
   }, [fetchGames]);
 
   return (

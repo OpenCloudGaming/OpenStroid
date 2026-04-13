@@ -1,9 +1,3 @@
-export interface AuthTokens {
-  access_token: string;
-  refresh_token: string;
-  user_data?: unknown;
-}
-
 export interface LoginCredentials {
   email: string;
   password: string;
@@ -17,6 +11,11 @@ export interface User {
   name?: string;
   avatar?: string;
   [key: string]: unknown;
+}
+
+export interface AuthSession {
+  authenticated: boolean;
+  user: User | null;
 }
 
 export interface InstalledGame {

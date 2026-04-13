@@ -1,14 +1,13 @@
 import {
-  createContext,
-  useContext,
   useState,
   useCallback,
   useEffect,
   type ReactNode,
 } from 'react';
-import type { User, LoginCredentials } from '../types';
+import type { LoginCredentials, User } from '../types';
 import * as api from '../api';
-import { setTokens, clearTokens, hasStoredSession } from './storage';
+import { AuthContext } from './context';
+import { clearLegacyAuthStorage } from './storage';
 
 interface AuthState {
   user: User | null;
@@ -17,82 +16,73 @@ interface AuthState {
   isBootstrapping: boolean;
 }
 
-interface AuthContextValue extends AuthState {
-  login: (credentials: LoginCredentials) => Promise<void>;
-  logout: () => Promise<void>;
-}
-
-const AuthContext = createContext<AuthContextValue | null>(null);
+const initialState: AuthState = {
+  user: null,
+  isAuthenticated: false,
+  isLoading: false,
+  isBootstrapping: true,
+};
 
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [state, setState] = useState<AuthState>({
-    user: null,
-    isAuthenticated: false,
-    isLoading: false,
-    isBootstrapping: hasStoredSession(),
-  });
+  const [state, setState] = useState<AuthState>(initialState);
+
+  const applySession = useCallback((user: User | null) => {
+    setState({
+      user,
+      isAuthenticated: Boolean(user),
+      isLoading: false,
+      isBootstrapping: false,
+    });
+  }, []);
 
   const bootstrapSession = useCallback(async () => {
-    if (!hasStoredSession()) {
-      setState((s) => ({ ...s, isBootstrapping: false }));
-      return;
-    }
+    clearLegacyAuthStorage();
+
     try {
-      const user = await api.getCurrentUser();
-      setState({
-        user,
-        isAuthenticated: true,
-        isLoading: false,
-        isBootstrapping: false,
-      });
+      const session = await api.getSession();
+      applySession(session.user);
     } catch {
-      clearTokens();
-      setState({
-        user: null,
-        isAuthenticated: false,
-        isLoading: false,
-        isBootstrapping: false,
-      });
+      clearLegacyAuthStorage();
+      applySession(null);
     }
-  }, []);
+  }, [applySession]);
 
   useEffect(() => {
     bootstrapSession();
   }, [bootstrapSession]);
 
+  useEffect(() => {
+    const handleUnauthorized = () => {
+      clearLegacyAuthStorage();
+      applySession(null);
+    };
+
+    window.addEventListener('openstroid:unauthorized', handleUnauthorized);
+    return () => {
+      window.removeEventListener('openstroid:unauthorized', handleUnauthorized);
+    };
+  }, [applySession]);
+
   const login = useCallback(async (credentials: LoginCredentials) => {
-    setState((s) => ({ ...s, isLoading: true }));
+    setState((current) => ({ ...current, isLoading: true }));
     try {
-      const tokens = await api.login(credentials);
-      setTokens(tokens.access_token, tokens.refresh_token, tokens.user_data);
-      const user = await api.getCurrentUser();
-      setState({
-        user,
-        isAuthenticated: true,
-        isLoading: false,
-        isBootstrapping: false,
-      });
+      clearLegacyAuthStorage();
+      const session = await api.login(credentials);
+      applySession(session.user);
     } catch (error) {
-      setState((s) => ({ ...s, isLoading: false }));
+      setState((current) => ({ ...current, isLoading: false }));
       throw error;
     }
-  }, []);
+  }, [applySession]);
 
   const logout = useCallback(async () => {
     try {
       await api.logout();
-    } catch {
-      // proceed even if server logout fails
     } finally {
-      clearTokens();
-      setState({
-        user: null,
-        isAuthenticated: false,
-        isLoading: false,
-        isBootstrapping: false,
-      });
+      clearLegacyAuthStorage();
+      applySession(null);
     }
-  }, []);
+  }, [applySession]);
 
   return (
     <AuthContext.Provider
@@ -107,10 +97,3 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   );
 }
 
-export function useAuth(): AuthContextValue {
-  const context = useContext(AuthContext);
-  if (!context) {
-    throw new Error('useAuth must be used within an AuthProvider');
-  }
-  return context;
-}

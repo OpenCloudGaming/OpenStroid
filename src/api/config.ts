@@ -1,11 +1,11 @@
 export const API_CONFIG = {
   baseUrl: import.meta.env.VITE_API_BASE_URL || '',
   endpoints: {
-    login: '/api/v1/auth/login',
-    refreshToken: '/api/v1/auth/refresh-token',
-    logout: '/api/v2/auth/logout',
-    user: '/api/v1/user',
-    installedGames: '/api/v1/boostore/applications/installed',
+    login: '/auth/login',
+    logout: '/auth/logout',
+    session: '/auth/session',
+    me: '/me',
+    installedGames: '/library/installed',
   },
   turnstileSiteKey:
     import.meta.env.VITE_TURNSTILE_SITE_KEY || '0x4AAAAAAB83Vz-GpH08brQi',
