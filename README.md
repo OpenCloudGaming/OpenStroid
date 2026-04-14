@@ -56,7 +56,7 @@ The backend exposes normalized first-party endpoints:
 
 | Variable | Default | Description |
 |---|---|---|
-| `VITE_API_BASE_URL` | *(empty)* | Frontend API origin. Leave empty for same-origin deployments. |
+| `VITE_API_BASE_URL` | *(empty)* | Frontend API origin. Leave empty in local dev and same-origin deployments so the browser stays on first-party `/auth`, `/me`, and `/library` routes. Never set this to a Boosteroid origin. |
 | `SERVER_PORT` | `3001` | Backend bridge port. |
 | `UPSTREAM_BASE_URL` | `https://cloud.boosteroid.com` | Upstream Boosteroid base URL. |
 | `SESSION_SECRET` | `openstroid-development-session-secret` | Secret used to encrypt/authenticate the session cookie. Replace in production. |
@@ -79,6 +79,7 @@ The backend exposes normalized first-party endpoints:
 - Build with `npm run build`.
 - Start the bridge with `npm run start`.
 - Serve the frontend and backend from the same origin when possible.
+- In local dev, keep `VITE_API_BASE_URL` empty so Vite proxies first-party routes to the backend bridge. The frontend must never call `https://cloud.boosteroid.com` directly.
 - Set a strong `SESSION_SECRET` and keep `COOKIE_SECURE=true` in production.
 - If you deploy the frontend separately, set `VITE_API_BASE_URL` to the backend origin and `APP_ORIGIN` to the frontend origin.
 
