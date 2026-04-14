@@ -20,6 +20,12 @@ const RELEVANT_PATH_PATTERNS = [
 ];
 const FINAL_STATUSES = new Set(['succeeded', 'failed', 'cancelled', 'timed_out'] as const);
 const MAX_CAPTURE_FILES = 25;
+const DEFAULT_BROWSER_ARGS = [
+  '--start-maximized',
+  '--window-size=1440,960',
+  '--disable-blink-features=AutomationControlled',
+  '--disable-features=IsolateOrigins,site-per-process',
+];
 
 type CaptureStatus = 'starting' | 'awaiting_user' | 'succeeded' | 'failed' | 'cancelled' | 'timed_out';
 type CaptureTerminalStatus = 'succeeded' | 'failed' | 'cancelled' | 'timed_out';
@@ -116,6 +122,42 @@ function serializeCookie(cookie: Cookie): StoredCookie {
 
 async function ensureArtifactDir(): Promise<void> {
   await fs.mkdir(serverConfig.authCaptureArtifactDir, { recursive: true });
+}
+
+async function ensureBrowserProfileDir(): Promise<void> {
+  await fs.mkdir(serverConfig.browserUserDataDir, { recursive: true });
+}
+
+function dedupeArgs(...groups: string[][]): string[] {
+  return [...new Set(groups.flat().filter(Boolean))];
+}
+
+async function applyStealthDefaults(context: BrowserContext): Promise<void> {
+  await context.addInitScript(`
+    Object.defineProperty(navigator, 'webdriver', {
+      get: () => undefined,
+      configurable: true,
+    });
+
+    if (!('chrome' in window)) {
+      Object.defineProperty(window, 'chrome', {
+        value: { runtime: {} },
+        configurable: true,
+      });
+    }
+
+    const originalQuery = navigator.permissions && navigator.permissions.query
+      ? navigator.permissions.query.bind(navigator.permissions)
+      : null;
+
+    if (originalQuery) {
+      navigator.permissions.query = (parameters) => (
+        parameters && parameters.name === 'notifications'
+          ? Promise.resolve({ state: Notification.permission })
+          : originalQuery(parameters)
+      );
+    }
+  `);
 }
 
 async function pruneArtifacts(): Promise<void> {
@@ -411,14 +453,25 @@ class AuthCaptureManager {
   private async runCapture(capture: CaptureRuntime): Promise<void> {
     try {
       await ensureArtifactDir();
-      const browser = await chromium.launch({
+      await ensureBrowserProfileDir();
+
+      const context = await chromium.launchPersistentContext(serverConfig.browserUserDataDir, {
         headless: serverConfig.browserHeadless,
         channel: serverConfig.browserChannel || undefined,
         executablePath: serverConfig.browserExecutablePath || undefined,
-        args: serverConfig.browserLaunchArgs,
+        locale: serverConfig.browserLocale,
+        timezoneId: 'UTC',
+        viewport: null,
+        ignoreHTTPSErrors: false,
+        args: dedupeArgs(DEFAULT_BROWSER_ARGS, serverConfig.browserLaunchArgs),
+        ignoreDefaultArgs: ['--enable-automation'],
       });
-      const context = await browser.newContext({ viewport: { width: 1400, height: 920 } });
-      const page = await context.newPage();
+      await applyStealthDefaults(context);
+
+      const existingPages = context.pages();
+      const page = existingPages.at(-1) ?? await context.newPage();
+      const browser = context.browser();
+
       capture.browser = browser;
       capture.context = context;
       capture.page = page;
@@ -428,9 +481,10 @@ class AuthCaptureManager {
       this.pushEvent(capture, {
         timestamp: new Date().toISOString(),
         type: 'note',
-        message: 'Browser launched. Waiting for manual Boosteroid login.',
+        message: `Browser launched in persistent profile mode using ${serverConfig.browserExecutablePath ?? serverConfig.browserChannel ?? 'default browser'}. Waiting for manual Boosteroid login.`,
       });
 
+      await page.bringToFront().catch(() => undefined);
       await page.goto(LOGIN_URL, { waitUntil: 'domcontentloaded', timeout: serverConfig.browserLaunchNavigateTimeoutMs });
 
       while (Date.now() < capture.timeoutAtMs) {

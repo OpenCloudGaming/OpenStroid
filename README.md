@@ -65,12 +65,14 @@ The backend exposes normalized first-party endpoints:
 | `COOKIE_SECURE` | `false` in dev, `true` in production | Whether to mark the auth cookie as `Secure`. |
 | `APP_ORIGIN` | *(unset)* | Optional allowed browser origin when frontend and backend run on different origins. |
 | `AUTH_CAPTURE_ARTIFACT_DIR` | `<project>/.runtime/auth-captures` | Directory where raw capture JSON artifacts are written. |
+| `BROWSER_USER_DATA_DIR` | `<project>/.runtime/browser-profile` | Persistent Chrome profile directory used for the backend-launched login browser. |
 | `BROWSER_LOGIN_TIMEOUT_MS` | `300000` | Maximum time allowed for manual upstream login before timing out. |
 | `BROWSER_LOGIN_POLL_INTERVAL_MS` | `1500` | Interval used while checking whether upstream auth cookies/tokens are ready. |
 | `BROWSER_LAUNCH_NAVIGATE_TIMEOUT_MS` | `30000` | Initial page navigation timeout for the launched browser. |
-| `BROWSER_HEADLESS` | `false` | Whether to launch the backend browser headlessly. Visible mode is the intended default. |
-| `BROWSER_CHANNEL` | *(unset)* | Optional browser channel passed to Playwright, such as `chromium` or `chrome`. |
-| `BROWSER_EXECUTABLE_PATH` | *(unset)* | Optional explicit browser executable path. |
+| `BROWSER_HEADLESS` | `false` | Whether to launch the backend browser headlessly. Visible mode is strongly recommended for Turnstile. |
+| `BROWSER_CHANNEL` | `chrome` when no explicit executable is found | Preferred browser channel passed to Playwright. Use a real Chrome install when possible. |
+| `BROWSER_EXECUTABLE_PATH` | auto-detects system Chrome/Chromium | Optional explicit browser executable path. |
+| `BROWSER_LOCALE` | `en-US` | Locale for the persistent browser profile. |
 | `BROWSER_LAUNCH_ARGS` | *(unset)* | Comma-separated extra browser launch arguments. |
 | `BACKEND_PROXY_TARGET` | `http://localhost:3001` | Vite-only proxy target for local frontend development. |
 
@@ -80,8 +82,17 @@ The backend exposes normalized first-party endpoints:
 - Start the bridge with `npm run start`.
 - Serve the frontend and backend from the same origin when possible.
 - In local dev, keep `VITE_API_BASE_URL` empty so Vite proxies first-party routes to the backend bridge. The frontend must never call `https://cloud.boosteroid.com` directly.
+- For the manual Boosteroid login flow, prefer visible system Chrome with the persistent backend profile directory. Turnstile is more likely to reject fresh ephemeral automation profiles or headless Chromium.
 - Set a strong `SESSION_SECRET` and keep `COOKIE_SECURE=true` in production.
 - If you deploy the frontend separately, set `VITE_API_BASE_URL` to the backend origin and `APP_ORIGIN` to the frontend origin.
+
+## Turnstile / browser-launch notes
+
+- The backend now launches a persistent browser profile instead of a throwaway ephemeral context.
+- When available, OpenStroid prefers the installed system Chrome binary over bundled Playwright Chromium.
+- The launch path removes Playwright's default `--enable-automation` flag, disables obvious automation blink features, keeps the browser visible by default, and preserves a realistic user profile between attempts.
+- OpenStroid does not script the Boosteroid login form or Turnstile widget. The page is opened for manual interaction only; capture stays passive and relies on observed network/cookies after login completes.
+- Even with these mitigations, anti-bot systems can still be environment-sensitive. Desktop sessions with a real display server and system Chrome are the recommended setup.
 
 ## Project structure
 
