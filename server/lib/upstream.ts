@@ -20,7 +20,7 @@ export interface UpstreamTokens {
 
 const refreshRequests = new Map<string, Promise<UpstreamTokens>>();
 
-function unwrapRecord(data: unknown): Record<string, unknown> {
+export function unwrapRecord(data: unknown): Record<string, unknown> {
   if (data && typeof data === 'object' && 'data' in data && data.data && typeof data.data === 'object') {
     return data.data as Record<string, unknown>;
   }
@@ -28,6 +28,17 @@ function unwrapRecord(data: unknown): Record<string, unknown> {
 }
 
 export function normalizeError(error: unknown): { status: number; message: string; details?: unknown } {
+  if (error instanceof Error) {
+    const typedError = error as Error & { status?: number; details?: unknown };
+    if (typeof typedError.status === 'number') {
+      return {
+        status: typedError.status,
+        message: typedError.message,
+        details: typedError.details,
+      };
+    }
+  }
+
   if (axios.isAxiosError(error)) {
     const status = error.response?.status ?? 502;
     const payload = error.response?.data as Record<string, unknown> | undefined;

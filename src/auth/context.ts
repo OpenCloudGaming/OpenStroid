@@ -1,5 +1,5 @@
 import { createContext } from 'react';
-import type { LoginCredentials, User } from '../types';
+import type { User } from '../types';
 
 interface AuthState {
   user: User | null;
@@ -9,7 +9,7 @@ interface AuthState {
 }
 
 export interface AuthContextValue extends AuthState {
-  login: (credentials: LoginCredentials) => Promise<void>;
+  refreshSession: () => Promise<void>;
   logout: () => Promise<void>;
 }
 

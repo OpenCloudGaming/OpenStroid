@@ -1,7 +1,13 @@
 import { apiClient } from './client';
 import { API_CONFIG } from './config';
-import { buildLoginPayload } from '../auth/login-adapter';
-import type { AuthSession, InstalledGame, LoginCredentials, User } from '../types';
+import type {
+  AuthCaptureDebugResponse,
+  AuthSession,
+  InstalledGame,
+  LoginCaptureSessionStatus,
+  LoginCaptureStartResponse,
+  User,
+} from '../types';
 
 function extractSession(data: Record<string, unknown>): AuthSession {
   return {
@@ -10,10 +16,25 @@ function extractSession(data: Record<string, unknown>): AuthSession {
   };
 }
 
-export async function login(credentials: LoginCredentials): Promise<AuthSession> {
-  const payload = buildLoginPayload(credentials);
-  const { data } = await apiClient.post(API_CONFIG.endpoints.login, payload);
-  return extractSession(data);
+export async function startLoginCapture(): Promise<LoginCaptureStartResponse> {
+  const { data } = await apiClient.post(API_CONFIG.endpoints.loginStart);
+  return data as LoginCaptureStartResponse;
+}
+
+export async function getLoginCaptureStatus(id?: string): Promise<LoginCaptureSessionStatus> {
+  const url = id ? `${API_CONFIG.endpoints.loginStatus}/${id}` : API_CONFIG.endpoints.loginStatus;
+  const { data } = await apiClient.get(url);
+  return data as LoginCaptureSessionStatus;
+}
+
+export async function cancelLoginCapture(id?: string): Promise<LoginCaptureSessionStatus> {
+  const { data } = await apiClient.post(API_CONFIG.endpoints.loginCancel, id ? { id } : {});
+  return data as LoginCaptureSessionStatus;
+}
+
+export async function getAuthCaptureDebug(): Promise<AuthCaptureDebugResponse> {
+  const { data } = await apiClient.get(API_CONFIG.endpoints.loginDebugCapture);
+  return data as AuthCaptureDebugResponse;
 }
 
 export async function logout(): Promise<void> {

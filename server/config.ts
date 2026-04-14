@@ -12,7 +12,11 @@ function parseBoolean(value: string | undefined, fallback: boolean): boolean {
 }
 
 const nodeEnv = process.env.NODE_ENV ?? 'development';
-const projectRoot = path.resolve(import.meta.dirname, '..');
+const configDir = import.meta.dirname;
+const buildServerSuffix = `${path.sep}build${path.sep}server${path.sep}server`;
+const projectRoot = configDir.endsWith(buildServerSuffix)
+  ? path.resolve(configDir, '..', '..', '..')
+  : path.resolve(configDir, '..');
 
 export const serverConfig = {
   nodeEnv,
@@ -24,5 +28,21 @@ export const serverConfig = {
   sessionTtlSeconds: parseNumber(process.env.SESSION_TTL_SECONDS, 60 * 60 * 24 * 30),
   cookieSecure: parseBoolean(process.env.COOKIE_SECURE, nodeEnv === 'production'),
   appOrigin: process.env.APP_ORIGIN,
+  authCaptureArtifactDir:
+    process.env.AUTH_CAPTURE_ARTIFACT_DIR ??
+    path.resolve(projectRoot, '.runtime', 'auth-captures'),
+  browserLoginTimeoutMs: parseNumber(process.env.BROWSER_LOGIN_TIMEOUT_MS, 5 * 60 * 1000),
+  browserLoginPollIntervalMs: parseNumber(process.env.BROWSER_LOGIN_POLL_INTERVAL_MS, 1500),
+  browserLaunchNavigateTimeoutMs: parseNumber(
+    process.env.BROWSER_LAUNCH_NAVIGATE_TIMEOUT_MS,
+    30 * 1000,
+  ),
+  browserHeadless: parseBoolean(process.env.BROWSER_HEADLESS, false),
+  browserExecutablePath: process.env.BROWSER_EXECUTABLE_PATH,
+  browserChannel: process.env.BROWSER_CHANNEL,
+  browserLaunchArgs: (process.env.BROWSER_LAUNCH_ARGS ?? '')
+    .split(',')
+    .map((value) => value.trim())
+    .filter(Boolean),
   distDir: path.resolve(projectRoot, 'dist'),
 } as const;

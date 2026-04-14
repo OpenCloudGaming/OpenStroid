@@ -3,11 +3,11 @@ import path from 'node:path';
 import express, { type NextFunction, type Request, type Response } from 'express';
 import cookieParser from 'cookie-parser';
 import { serverConfig } from './config.js';
+import { authCaptureManager } from './lib/authCapture.js';
 import { clearSession, createSession, readSession, writeSession } from './lib/session.js';
 import {
   getInstalledGamesUpstream,
   getUpstreamUser,
-  loginUpstream,
   logoutUpstream,
   normalizeError,
   withRefresh,
@@ -53,35 +53,87 @@ function requireSession(req: Request, res: Response) {
   return session;
 }
 
+function sendCaptureStatus(req: Request, res: Response, captureId?: string) {
+  const capture = authCaptureManager.getStatus(captureId);
+  if (!capture) {
+    res.status(404).json({ message: 'No login capture session found.' });
+    return;
+  }
+
+  let sessionEstablished = false;
+  if (capture.status === 'succeeded' && capture.bridgeSession) {
+    const existingSession = readSession(req);
+    const nextSession = createSession({
+      accessToken: capture.bridgeSession.accessToken,
+      refreshToken: capture.bridgeSession.refreshToken,
+      userData: capture.bridgeSession.userData,
+      user: capture.bridgeSession.user,
+      existing: existingSession ?? capture.bridgeSession,
+    });
+    writeSession(res, nextSession);
+    sessionEstablished = true;
+  }
+
+  res.json({
+    id: capture.id,
+    status: capture.status,
+    startedAt: capture.startedAt,
+    updatedAt: capture.updatedAt,
+    completedAt: capture.completedAt,
+    timeoutAt: capture.timeoutAt,
+    finalUrl: capture.finalUrl,
+    errors: capture.errors,
+    eventCount: capture.eventCount,
+    user: capture.userPayload,
+    sessionEstablished,
+  });
+}
+
 app.get('/health', (_req, res) => {
   res.json({ ok: true });
 });
 
-app.post('/auth/login', async (req, res, next) => {
+app.post('/auth/login/start', async (_req, res, next) => {
   try {
-    const body = req.body as Record<string, string | boolean | undefined>;
-    const payload: Record<string, string | boolean> = {
-      email: String(body.email ?? '').trim().toLowerCase(),
-      password: String(body.password ?? ''),
-      remember_me: Boolean(body.remember_me),
-    };
+    const capture = await authCaptureManager.start();
+    clearSession(res);
+    res.status(202).json(capture);
+  } catch (error) {
+    next(error);
+  }
+});
 
-    const turnstileToken = body['cf-turnstile-response'];
-    if (typeof turnstileToken === 'string' && turnstileToken.length > 0) {
-      payload['cf-turnstile-response'] = turnstileToken;
+app.get('/auth/login/status', (req, res) => {
+  sendCaptureStatus(req, res);
+});
+
+app.get('/auth/login/status/:id', (req, res) => {
+  sendCaptureStatus(req, res, req.params.id);
+});
+
+app.post('/auth/login/cancel', async (req, res, next) => {
+  try {
+    const captureId = typeof req.body?.id === 'string' ? req.body.id : undefined;
+    const capture = await authCaptureManager.cancel(captureId);
+    if (!capture) {
+      res.status(404).json({ message: 'No active login capture session found.' });
+      return;
     }
 
-    const tokens = await loginUpstream(payload);
-    const user = await getUpstreamUser(tokens.access_token);
-    const session = createSession({
-      accessToken: tokens.access_token,
-      refreshToken: tokens.refresh_token,
-      userData: tokens.user_data,
-      user,
+    clearSession(res);
+    res.json({
+      id: capture.id,
+      status: capture.status,
+      startedAt: capture.startedAt,
+      updatedAt: capture.updatedAt,
+      completedAt: capture.completedAt,
+      timeoutAt: capture.timeoutAt,
+      finalUrl: capture.finalUrl,
+      errors: capture.errors,
+      eventCount: capture.eventCount,
+      user: capture.userPayload,
+      sessionEstablished: false,
     });
-
-    writeSession(res, session);
-    sendSession(res, user);
   } catch (error) {
     next(error);
   }
@@ -127,6 +179,26 @@ app.get('/auth/session', async (req, res, next) => {
     clearSession(res);
     next(error);
   }
+});
+
+app.get('/auth/debug/capture', (req, res) => {
+  const session = requireSession(req, res);
+  if (!session) return;
+
+  const { artifact, path: artifactPath } = authCaptureManager.getLatestArtifact();
+  if (!artifact) {
+    res.status(404).json({ message: 'No auth capture artifact available yet.' });
+    return;
+  }
+
+  res.json({
+    artifact,
+    artifactPath,
+    requestedBy: {
+      email: session.user?.email ?? null,
+      updatedAt: session.updatedAt,
+    },
+  });
 });
 
 app.get('/me', async (req, res, next) => {

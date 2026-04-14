@@ -23,6 +23,7 @@ import {
   IconCloudComputing,
 } from '@tabler/icons-react';
 import { getInstalledGames } from '../api';
+import { AuthCaptureDebugPanel } from '../components/AuthCaptureDebugPanel';
 import type { InstalledGame } from '../types';
 
 type LoadState = 'loading' | 'success' | 'error';
@@ -122,6 +123,10 @@ export function LibraryPage() {
           ))}
         </SimpleGrid>
       )}
+
+      <Box mt="xl">
+        <AuthCaptureDebugPanel compact title="Debug: latest upstream capture" />
+      </Box>
     </Box>
   );
 }

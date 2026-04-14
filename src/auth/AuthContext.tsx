@@ -4,7 +4,7 @@ import {
   useEffect,
   type ReactNode,
 } from 'react';
-import type { LoginCredentials, User } from '../types';
+import type { User } from '../types';
 import * as api from '../api';
 import { AuthContext } from './context';
 import { clearLegacyAuthStorage } from './storage';
@@ -35,7 +35,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     });
   }, []);
 
-  const bootstrapSession = useCallback(async () => {
+  const refreshSession = useCallback(async () => {
+    setState((current) => ({ ...current, isLoading: true }));
     clearLegacyAuthStorage();
 
     try {
@@ -48,8 +49,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [applySession]);
 
   useEffect(() => {
-    bootstrapSession();
-  }, [bootstrapSession]);
+    void refreshSession();
+  }, [refreshSession]);
 
   useEffect(() => {
     const handleUnauthorized = () => {
@@ -61,18 +62,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return () => {
       window.removeEventListener('openstroid:unauthorized', handleUnauthorized);
     };
-  }, [applySession]);
-
-  const login = useCallback(async (credentials: LoginCredentials) => {
-    setState((current) => ({ ...current, isLoading: true }));
-    try {
-      clearLegacyAuthStorage();
-      const session = await api.login(credentials);
-      applySession(session.user);
-    } catch (error) {
-      setState((current) => ({ ...current, isLoading: false }));
-      throw error;
-    }
   }, [applySession]);
 
   const logout = useCallback(async () => {
@@ -88,7 +77,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     <AuthContext.Provider
       value={{
         ...state,
-        login,
+        refreshSession,
         logout,
       }}
     >
@@ -96,4 +85,3 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     </AuthContext.Provider>
   );
 }
-
