@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>OpenStroid Capture</title>
+    <style>
+      body {
+        font-family: Inter, Arial, sans-serif;
+        background: #11131a;
+        color: #f3f5f7;
+        width: 320px;
+        margin: 0;
+        padding: 16px;
+      }
+      h1 {
+        font-size: 16px;
+        margin: 0 0 12px;
+      }
+      label {
+        display: block;
+        font-size: 12px;
+        color: #9ca3af;
+        margin-bottom: 6px;
+      }
+      input {
+        width: 100%;
+        box-sizing: border-box;
+        border: 1px solid #374151;
+        background: #0b0d12;
+        color: #f3f5f7;
+        border-radius: 8px;
+        padding: 10px 12px;
+        margin-bottom: 10px;
+      }
+      button {
+        border: 0;
+        border-radius: 8px;
+        padding: 10px 12px;
+        font-weight: 600;
+        cursor: pointer;
+        margin-right: 8px;
+      }
+      #save {
+        background: linear-gradient(135deg, #00d4f5 0%, #6600f5 100%);
+        color: white;
+      }
+      #open {
+        background: #1f2937;
+        color: white;
+      }
+      pre {
+        white-space: pre-wrap;
+        word-break: break-word;
+        background: #0b0d12;
+        border: 1px solid #374151;
+        border-radius: 8px;
+        padding: 10px;
+        font-size: 11px;
+        color: #9ca3af;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>OpenStroid Capture</h1>
+    <label for="backendBaseUrl">Backend base URL</label>
+    <input id="backendBaseUrl" type="text" placeholder="http://localhost:3001" />
+    <div>
+      <button id="save">Save</button>
+      <button id="open" type="button">Open Boosteroid</button>
+    </div>
+    <pre id="status">Loading…</pre>
+    <script src="popup.js"></script>
+  </body>
+</html>

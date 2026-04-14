@@ -11,12 +11,6 @@ export interface AuthSession {
   user: User | null;
 }
 
-export interface LoginCaptureStartResponse {
-  id: string;
-  status: LoginCaptureStatus;
-  timeoutAt: string;
-}
-
 export type LoginCaptureStatus =
   | 'starting'
   | 'awaiting_user'
@@ -25,6 +19,16 @@ export type LoginCaptureStatus =
   | 'cancelled'
   | 'timed_out';
 
+export type LoginCaptureMethod = 'extension' | 'browser';
+
+export interface LoginCaptureStartResponse {
+  id: string;
+  status: LoginCaptureStatus;
+  timeoutAt: string;
+  captureMethod: LoginCaptureMethod;
+  loginUrl: string;
+}
+
 export interface LoginCaptureSessionStatus {
   id: string;
   status: LoginCaptureStatus;
@@ -32,10 +36,12 @@ export interface LoginCaptureSessionStatus {
   updatedAt: string;
   completedAt: string | null;
   timeoutAt: string;
+  loginUrl: string;
   finalUrl: string | null;
   errors: string[];
   eventCount: number;
   user: User | null;
+  captureMethod: LoginCaptureMethod;
   sessionEstablished: boolean;
 }
 
@@ -49,6 +55,7 @@ export interface CaptureEvent {
   headers?: Record<string, string>;
   cookieNames?: string[];
   message?: string;
+  source?: 'browser' | 'extension';
 }
 
 export interface StoredCookie {
@@ -64,6 +71,7 @@ export interface StoredCookie {
 
 export interface CaptureArtifact {
   id: string;
+  captureMethod: LoginCaptureMethod;
   status: LoginCaptureStatus;
   startedAt: string;
   updatedAt: string;
@@ -86,6 +94,8 @@ export interface CaptureArtifact {
     createdAt: number;
     updatedAt: number;
   } | null;
+  ingestSource?: 'browser' | 'extension';
+  extensionMetadata?: Record<string, unknown>;
 }
 
 export interface AuthCaptureDebugResponse {

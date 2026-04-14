@@ -3,7 +3,7 @@ import path from 'node:path';
 import express, { type NextFunction, type Request, type Response } from 'express';
 import cookieParser from 'cookie-parser';
 import { serverConfig } from './config.js';
-import { authCaptureManager } from './lib/authCapture.js';
+import { authCaptureManager, type CaptureMethod } from './lib/authCapture.js';
 import { clearSession, createSession, readSession, writeSession } from './lib/session.js';
 import {
   getInstalledGamesUpstream,
@@ -16,14 +16,19 @@ import {
 const app = express();
 
 app.set('trust proxy', 1);
-app.use(express.json());
+app.use(express.json({ limit: '2mb' }));
 app.use(cookieParser());
 
 app.use((req, res, next) => {
-  if (serverConfig.appOrigin) {
+  const origin = req.header('origin');
+  if (origin?.startsWith('chrome-extension://')) {
+    res.header('Access-Control-Allow-Origin', origin);
+    res.header('Vary', 'Origin');
+  } else if (serverConfig.appOrigin) {
     res.header('Access-Control-Allow-Origin', serverConfig.appOrigin);
     res.header('Vary', 'Origin');
   }
+
   res.header('Access-Control-Allow-Credentials', 'true');
   res.header('Access-Control-Allow-Headers', 'Content-Type');
   res.header('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
@@ -81,10 +86,12 @@ function sendCaptureStatus(req: Request, res: Response, captureId?: string) {
     updatedAt: capture.updatedAt,
     completedAt: capture.completedAt,
     timeoutAt: capture.timeoutAt,
+    loginUrl: capture.loginUrl,
     finalUrl: capture.finalUrl,
     errors: capture.errors,
     eventCount: capture.eventCount,
     user: capture.userPayload,
+    captureMethod: capture.captureMethod,
     sessionEstablished,
   });
 }
@@ -93,9 +100,11 @@ app.get('/health', (_req, res) => {
   res.json({ ok: true });
 });
 
-app.post('/auth/login/start', async (_req, res, next) => {
+app.post('/auth/login/start', async (req, res, next) => {
   try {
-    const capture = await authCaptureManager.start();
+    const requestedMethod = req.body?.method;
+    const method: CaptureMethod = requestedMethod === 'browser' ? 'browser' : 'extension';
+    const capture = await authCaptureManager.start(method);
     clearSession(res);
     res.status(202).json(capture);
   } catch (error) {
@@ -128,11 +137,37 @@ app.post('/auth/login/cancel', async (req, res, next) => {
       updatedAt: capture.updatedAt,
       completedAt: capture.completedAt,
       timeoutAt: capture.timeoutAt,
+      loginUrl: capture.loginUrl,
       finalUrl: capture.finalUrl,
       errors: capture.errors,
       eventCount: capture.eventCount,
       user: capture.userPayload,
+      captureMethod: capture.captureMethod,
       sessionEstablished: false,
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get('/auth/extension/active', (_req, res) => {
+  const active = authCaptureManager.getActiveExtensionSession();
+  if (!active) {
+    res.status(404).json({ message: 'No active extension capture session.' });
+    return;
+  }
+
+  res.json(active);
+});
+
+app.post('/auth/extension/capture', async (req, res, next) => {
+  try {
+    const artifact = await authCaptureManager.ingestExtensionCapture(req.body);
+    res.status(202).json({
+      id: artifact.id,
+      status: artifact.status,
+      captureMethod: artifact.captureMethod,
+      completedAt: artifact.completedAt,
     });
   } catch (error) {
     next(error);

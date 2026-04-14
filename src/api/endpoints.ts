@@ -4,6 +4,7 @@ import type {
   AuthCaptureDebugResponse,
   AuthSession,
   InstalledGame,
+  LoginCaptureMethod,
   LoginCaptureSessionStatus,
   LoginCaptureStartResponse,
   User,
@@ -16,8 +17,8 @@ function extractSession(data: Record<string, unknown>): AuthSession {
   };
 }
 
-export async function startLoginCapture(): Promise<LoginCaptureStartResponse> {
-  const { data } = await apiClient.post(API_CONFIG.endpoints.loginStart);
+export async function startLoginCapture(method: LoginCaptureMethod = 'extension'): Promise<LoginCaptureStartResponse> {
+  const { data } = await apiClient.post(API_CONFIG.endpoints.loginStart, { method });
   return data as LoginCaptureStartResponse;
 }
 

@@ -6,6 +6,7 @@ import {
   Button,
   Center,
   Code,
+  Divider,
   Group,
   List,
   Loader,
@@ -18,11 +19,12 @@ import {
 import {
   IconAlertCircle,
   IconArrowRight,
+  IconBrandChrome,
   IconCheck,
   IconExternalLink,
   IconPlayerStop,
   IconRefresh,
-  IconSparkles,
+  IconPuzzle,
 } from '@tabler/icons-react';
 import { AxiosError } from 'axios';
 import {
@@ -32,23 +34,33 @@ import {
 } from '../api';
 import { useAuth } from '../auth';
 import { AuthCaptureDebugPanel } from '../components/AuthCaptureDebugPanel';
-import type { ApiError, LoginCaptureSessionStatus, LoginCaptureStatus } from '../types';
+import type {
+  ApiError,
+  LoginCaptureMethod,
+  LoginCaptureSessionStatus,
+  LoginCaptureStatus,
+} from '../types';
 
 const POLL_INTERVAL_MS = 1500;
 const TERMINAL_STATUSES = new Set<LoginCaptureStatus>(['succeeded', 'failed', 'cancelled', 'timed_out']);
+const EXTENSION_PATH = 'extension/openstroid-capture';
 
-function describeStatus(status: LoginCaptureStatus): string {
+function describeStatus(status: LoginCaptureStatus, method: LoginCaptureMethod | undefined): string {
   switch (status) {
     case 'starting':
-      return 'Launching a real browser window on the backend host.';
+      return method === 'browser'
+        ? 'Launching the backend browser fallback.'
+        : 'Creating an extension capture session.';
     case 'awaiting_user':
-      return 'Finish login in the Boosteroid window. Turnstile stays on Boosteroid.';
+      return method === 'browser'
+        ? 'Complete login in the backend-launched browser window.'
+        : 'Use the OpenStroid Chrome extension while you log in on Boosteroid in your real browser.';
     case 'succeeded':
-      return 'Authenticated session captured. OpenStroid is establishing its own first-party session.';
+      return 'Captured upstream auth state. OpenStroid is establishing its own first-party session.';
     case 'failed':
-      return 'Capture failed before an authenticated upstream session was detected.';
+      return 'Capture failed before a usable upstream session was received.';
     case 'cancelled':
-      return 'Capture was cancelled and the browser context was cleaned up.';
+      return 'Capture was cancelled.';
     case 'timed_out':
       return 'Capture timed out before login completed.';
     default:
@@ -97,24 +109,27 @@ export function LoginPage() {
     }
   }, [from, navigate, refreshSession]);
 
-  useEffect(() => {
-    return () => stopPolling();
-  }, [stopPolling]);
+  useEffect(() => () => stopPolling(), [stopPolling]);
 
-  const handleStart = useCallback(async () => {
+  const startCapture = useCallback(async (method: LoginCaptureMethod) => {
     stopPolling();
     setIsSubmitting(true);
     setServerError(null);
     try {
-      const started = await startLoginCapture();
+      const started = await startLoginCapture(method);
       const initialStatus = await getLoginCaptureStatus(started.id);
       setCapture(initialStatus);
       void pollStatus(started.id);
+      if (method === 'extension') {
+        window.open(started.loginUrl, '_blank', 'noopener,noreferrer');
+      }
     } catch (err) {
       const axiosErr = err as AxiosError<ApiError>;
       const fallback = axiosErr.response?.status === 409
-        ? 'A login capture is already running. Use refresh to follow it or cancel it first.'
-        : 'Could not start the Boosteroid browser login flow.';
+        ? 'A login capture is already running. Follow that session or cancel it first.'
+        : method === 'browser'
+          ? 'Could not start the backend browser fallback.'
+          : 'Could not start the extension capture session.';
       setServerError(axiosErr.response?.data?.message || fallback);
     } finally {
       setIsSubmitting(false);
@@ -179,7 +194,7 @@ export function LoginPage() {
       }}
     >
       <Center style={{ position: 'relative', zIndex: 1, width: '100%', padding: '24px' }}>
-        <Stack gap="xl" w="100%" maw={860}>
+        <Stack gap="xl" w="100%" maw={920}>
           <Stack gap={6} align="center">
             <Box
               style={{
@@ -200,7 +215,9 @@ export function LoginPage() {
                 OpenStroid
               </Text>
             </Title>
-            <Text c="dimmed" size="sm" ta="center">Boosteroid login now runs in a real upstream browser window.</Text>
+            <Text c="dimmed" size="sm" ta="center">
+              Primary login capture now runs through a Chrome extension in your real browser profile.
+            </Text>
           </Stack>
 
           <Paper
@@ -215,14 +232,14 @@ export function LoginPage() {
           >
             <Stack gap="lg">
               <Group justify="space-between" align="flex-start">
-                <Stack gap={4} maw={560}>
+                <Stack gap={4} maw={620}>
                   <Title order={3} fw={600}>Sign in with Boosteroid</Title>
                   <Text size="sm" c="dimmed">
-                    OpenStroid launches a visible browser on the backend host, waits for you to finish the real Boosteroid login and Turnstile challenge there, then captures the resulting upstream session into the existing OpenStroid cookie session.
+                    Install the unpacked OpenStroid Chrome extension, start a capture session here, then log in to Boosteroid in your normal Chrome profile. The extension observes the real browser session and sends upstream cookies and auth evidence back to the OpenStroid backend.
                   </Text>
                 </Stack>
                 <ThemeIcon size={44} radius="xl" variant="light" color="brand">
-                  <IconSparkles size={22} />
+                  <IconBrandChrome size={22} />
                 </ThemeIcon>
               </Group>
 
@@ -231,9 +248,9 @@ export function LoginPage() {
                 size="sm"
                 icon={<ThemeIcon color="brand" size={22} radius="xl"><IconCheck size={14} /></ThemeIcon>}
               >
-                <List.Item>Credentials are entered only on Boosteroid’s own page.</List.Item>
-                <List.Item>The backend-owned browser context is the source of truth for upstream cookies and auth payloads.</List.Item>
-                <List.Item>Captured cookies, payloads, and request metadata are saved to disk and exposed through a gated debug endpoint.</List.Item>
+                <List.Item>Load the unpacked extension from <Code>{EXTENSION_PATH}</Code> into Chrome.</List.Item>
+                <List.Item>In the extension popup, keep the backend URL set to <Code>http://localhost:3001</Code> for local dev.</List.Item>
+                <List.Item>Start capture below, then complete login on <Code>boosteroid.com</Code> in the same Chrome profile.</List.Item>
               </List>
 
               {serverError && (
@@ -247,11 +264,19 @@ export function LoginPage() {
                   size="md"
                   variant="gradient"
                   gradient={{ from: 'brand.5', to: 'accent.6', deg: 135 }}
-                  leftSection={<IconExternalLink size={16} />}
-                  onClick={() => void handleStart()}
+                  leftSection={<IconPuzzle size={16} />}
+                  onClick={() => void startCapture('extension')}
                   loading={isSubmitting}
                 >
-                  Launch Boosteroid login
+                  Start extension capture
+                </Button>
+                <Button
+                  size="md"
+                  variant="light"
+                  leftSection={<IconExternalLink size={16} />}
+                  onClick={() => window.open('https://boosteroid.com/', '_blank', 'noopener,noreferrer')}
+                >
+                  Open Boosteroid login
                 </Button>
                 <Button
                   size="md"
@@ -262,25 +287,17 @@ export function LoginPage() {
                 >
                   Refresh status
                 </Button>
-                <Button
-                  size="md"
-                  variant="subtle"
-                  color="red"
-                  leftSection={<IconPlayerStop size={16} />}
-                  onClick={() => void handleCancel()}
-                  disabled={!capture || TERMINAL_STATUSES.has(capture.status) || isSubmitting}
-                >
-                  Cancel capture
-                </Button>
               </Group>
 
               <Alert color={statusTone} variant="light" title={capture ? `Status: ${capture.status}` : 'No capture running'}>
                 <Stack gap={6}>
-                  <Text size="sm">{capture ? describeStatus(capture.status) : 'Start a capture to open the browser window and begin manual login.'}</Text>
+                  <Text size="sm">{capture ? describeStatus(capture.status, capture.captureMethod) : 'Start a capture session, then complete login in Chrome with the extension enabled.'}</Text>
                   {capture && (
                     <>
                       <Text size="xs" c="dimmed">Capture ID: <Code>{capture.id}</Code></Text>
+                      <Text size="xs" c="dimmed">Method: <Code>{capture.captureMethod}</Code></Text>
                       <Text size="xs" c="dimmed">Timeout: {new Date(capture.timeoutAt).toLocaleString()}</Text>
+                      <Text size="xs" c="dimmed">Login URL: <Code>{capture.loginUrl}</Code></Text>
                       {capture.finalUrl && <Text size="xs" c="dimmed">Final URL: <Code>{capture.finalUrl}</Code></Text>}
                       {capture.errors.length > 0 && (
                         <Text size="xs" c="yellow.3">{capture.errors[capture.errors.length - 1]}</Text>
@@ -307,8 +324,42 @@ export function LoginPage() {
                       Continue to library
                     </Button>
                   )}
+                  {capture && !TERMINAL_STATUSES.has(capture.status) && (
+                    <Button
+                      size="xs"
+                      variant="subtle"
+                      color="red"
+                      leftSection={<IconPlayerStop size={14} />}
+                      onClick={() => void handleCancel()}
+                    >
+                      Cancel capture
+                    </Button>
+                  )}
                 </Stack>
               </Alert>
+
+              <Divider color="dark.4" />
+
+              <Stack gap="xs">
+                <Title order={4} fw={600}>Optional backend browser fallback</Title>
+                <Text size="sm" c="dimmed">
+                  Use only if the extension flow is unavailable. This still launches a backend-owned browser and may be less reliable against Turnstile than the extension path.
+                </Text>
+                <Group>
+                  <Button
+                    size="sm"
+                    variant="subtle"
+                    leftSection={<IconExternalLink size={14} />}
+                    onClick={() => void startCapture('browser')}
+                    loading={isSubmitting}
+                  >
+                    Start backend browser fallback
+                  </Button>
+                  <Text size="sm" c="dimmed">
+                    Load unpacked extension from <Code>{EXTENSION_PATH}</Code>
+                  </Text>
+                </Group>
+              </Stack>
             </Stack>
           </Paper>
 

@@ -1,6 +1,6 @@
 # OpenStroid
 
-Open-source cloud gaming client. Built with React, TypeScript, Mantine, Vite, Express, and a backend-owned browser capture bridge for Boosteroid authentication.
+Open-source cloud gaming client. Built with React, TypeScript, Mantine, Vite, Express, and a first-party auth bridge that captures Boosteroid login state from the user’s real Chrome profile via a Chrome extension.
 
 ## Quick start
 
@@ -13,15 +13,16 @@ npm run dev
 - Frontend dev server: [http://localhost:3000](http://localhost:3000)
 - Backend auth bridge: [http://localhost:3001](http://localhost:3001)
 
-`npm run dev` starts both processes. The browser talks only to first-party `/auth`, `/me`, and `/library` routes. The backend bridge owns the upstream Boosteroid session, launches a real browser window for manual upstream login, and proxies authenticated requests to `https://cloud.boosteroid.com`.
+`npm run dev` starts both processes. The browser talks only to first-party `/auth`, `/me`, and `/library` routes. The backend bridge owns the upstream Boosteroid session state after capture and proxies authenticated requests to `https://cloud.boosteroid.com`.
 
 ## Auth bridge architecture
 
 OpenStroid is no longer a browser-direct or credential-forwarding Boosteroid client.
 
-- The frontend starts a backend login capture instead of posting credentials to OpenStroid.
-- The backend launches a visible Playwright-controlled browser window to the real Boosteroid login experience and waits for the user to complete Turnstile manually.
-- Once Boosteroid sets authenticated upstream state, the backend captures raw cookies and observed auth/session payloads, validates the upstream session, and converts it into the existing encrypted first-party OpenStroid cookie session.
+- The frontend starts a first-party capture session instead of posting credentials to OpenStroid.
+- The primary capture path is the unpacked Chrome extension in `extension/openstroid-capture/`, which runs inside the user’s real Chrome profile while they log in normally on `boosteroid.com` / `cloud.boosteroid.com`.
+- The extension captures relevant cookies plus observed auth/session response payloads and sends them back to the local OpenStroid backend.
+- The backend validates the submitted upstream state, persists raw capture artifacts, and converts successful captures into the existing encrypted first-party OpenStroid cookie session.
 - The frontend sends session bootstrap, logout, and library requests to first-party endpoints on the OpenStroid origin.
 - The backend bridge talks to `https://cloud.boosteroid.com` for:
   - browser-observed `POST /api/v1/auth/login`
@@ -34,6 +35,7 @@ OpenStroid is no longer a browser-direct or credential-forwarding Boosteroid cli
 - The browser no longer stores raw upstream tokens in `localStorage`.
 - Session bootstrap uses `GET /auth/session` instead of reading browser storage.
 - Upstream 401s are refreshed server-side with a shared refresh lock to avoid duplicate refresh races.
+- A backend-owned browser fallback still exists, but it is secondary to the extension flow because Turnstile is more reliable in the user’s real browser profile.
 
 ## API surface
 
@@ -45,6 +47,8 @@ The backend exposes normalized first-party endpoints:
 | `GET` | `/auth/login/status` | Read the latest capture status and establish the first-party OpenStroid session on success |
 | `GET` | `/auth/login/status/:id` | Read status for a specific capture session |
 | `POST` | `/auth/login/cancel` | Cancel the active capture and clean up browser resources |
+| `GET` | `/auth/extension/active` | Extension-only route to read the currently active pending extension capture session |
+| `POST` | `/auth/extension/capture` | Extension-only route to submit captured upstream cookies/payloads for ingestion |
 | `GET` | `/auth/debug/capture` | Return the latest raw upstream capture artifact, including cookies and payloads |
 | `POST` | `/auth/logout` | Clear first-party session and attempt upstream logout |
 | `GET` | `/auth/session` | Validate/refresh current session and return `{ authenticated, user }` |
@@ -82,17 +86,26 @@ The backend exposes normalized first-party endpoints:
 - Start the bridge with `npm run start`.
 - Serve the frontend and backend from the same origin when possible.
 - In local dev, keep `VITE_API_BASE_URL` empty so Vite proxies first-party routes to the backend bridge. The frontend must never call `https://cloud.boosteroid.com` directly.
-- For the manual Boosteroid login flow, prefer visible system Chrome with the persistent backend profile directory. Turnstile is more likely to reject fresh ephemeral automation profiles or headless Chromium.
+- For local dev, load the unpacked extension from `extension/openstroid-capture/` into Chrome and keep its backend URL pointed at `http://localhost:3001`.
 - Set a strong `SESSION_SECRET` and keep `COOKIE_SECURE=true` in production.
 - If you deploy the frontend separately, set `VITE_API_BASE_URL` to the backend origin and `APP_ORIGIN` to the frontend origin.
 
-## Turnstile / browser-launch notes
+## Chrome extension setup (local dev)
 
-- The backend now launches a persistent browser profile instead of a throwaway ephemeral context.
-- When available, OpenStroid prefers the installed system Chrome binary over bundled Playwright Chromium.
-- The launch path removes Playwright's default `--enable-automation` flag, disables obvious automation blink features, keeps the browser visible by default, and preserves a realistic user profile between attempts.
-- OpenStroid does not script the Boosteroid login form or Turnstile widget. The page is opened for manual interaction only; capture stays passive and relies on observed network/cookies after login completes.
-- Even with these mitigations, anti-bot systems can still be environment-sensitive. Desktop sessions with a real display server and system Chrome are the recommended setup.
+1. Open `chrome://extensions`.
+2. Enable Developer Mode.
+3. Choose **Load unpacked**.
+4. Select `extension/openstroid-capture/` from this repo.
+5. Open the extension popup and confirm the backend URL is `http://localhost:3001`.
+6. In OpenStroid, click **Start extension capture** and then log in on Boosteroid in the same Chrome profile.
+
+## Turnstile / capture notes
+
+- The extension flow is primary because it runs in the user’s real Chrome profile rather than an automated backend browser context.
+- The extension can read relevant Boosteroid cookies through Chrome’s cookie APIs, including HttpOnly cookies when host permissions are granted.
+- Response metadata is captured through `webRequest`, while JSON response payloads are captured from page `fetch`/XHR instrumentation on Boosteroid pages.
+- OpenStroid does not automate the login form or Turnstile challenge. The extension only observes requests, responses, cookies, and page visits after the user interacts normally.
+- The backend-owned browser fallback remains available as a secondary option for environments where the extension cannot be used.
 
 ## Project structure
 
@@ -112,11 +125,13 @@ src/
 ├── pages/           # Route-level page components
 ├── theme/           # Mantine theme customization
 └── types/           # Shared TypeScript interfaces
+extension/
+└── openstroid-capture/  # Unpacked Chrome extension for real-browser Boosteroid capture
 ```
 
 ## Current features (auth bridge refactor)
 
-- **Manual upstream login capture** — the user completes the real Boosteroid + Turnstile login in a backend-launched browser window
+- **Chrome extension capture** — the user completes the real Boosteroid + Turnstile login in their own Chrome profile while the extension captures upstream state
 - **Server-managed session** — session bootstrap checks `/auth/session` and keeps upstream tokens out of browser JavaScript
 - **Debug evidence capture** — raw upstream cookies, payloads, and request metadata are inspectable from the UI and saved to `.runtime/auth-captures`
 - **My Games library** — installed games loaded through first-party backend routes with existing loading, empty, and error states
