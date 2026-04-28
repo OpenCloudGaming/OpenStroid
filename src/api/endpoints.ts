@@ -7,6 +7,7 @@ import type {
   LoginCaptureMethod,
   LoginCaptureSessionStatus,
   LoginCaptureStartResponse,
+  StreamLaunchResponse,
   User,
 } from '../types';
 
@@ -56,4 +57,9 @@ export async function getInstalledGames(): Promise<InstalledGame[]> {
   const { data } = await apiClient.get(API_CONFIG.endpoints.installedGames);
   if (Array.isArray(data?.games)) return data.games as InstalledGame[];
   return [];
+}
+
+export async function launchStream(appId: number): Promise<StreamLaunchResponse> {
+  const { data } = await apiClient.post(API_CONFIG.endpoints.streamLaunch, { appId }, { timeout: 190000 });
+  return data as StreamLaunchResponse;
 }

@@ -9,4 +9,5 @@ export {
   getSession,
   getCurrentUser,
   getInstalledGames,
+  launchStream,
 } from './endpoints';

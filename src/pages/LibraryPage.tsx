@@ -21,8 +21,9 @@ import {
   IconRefresh,
   IconDeviceGamepad2,
   IconCloudComputing,
+  IconPlayerPlay,
 } from '@tabler/icons-react';
-import { getInstalledGames } from '../api';
+import { getInstalledGames, launchStream } from '../api';
 import { AuthCaptureDebugPanel } from '../components/AuthCaptureDebugPanel';
 import type { InstalledGame } from '../types';
 
@@ -32,6 +33,8 @@ export function LibraryPage() {
   const [games, setGames] = useState<InstalledGame[]>([]);
   const [loadState, setLoadState] = useState<LoadState>('loading');
   const [errorMsg, setErrorMsg] = useState<string>('');
+  const [launchingGameId, setLaunchingGameId] = useState<number | null>(null);
+  const [launchError, setLaunchError] = useState<string>('');
 
   const fetchGames = useCallback(async () => {
     setLoadState('loading');
@@ -46,6 +49,26 @@ export function LibraryPage() {
         'Failed to load your game library.';
       setErrorMsg(msg);
       setLoadState('error');
+    }
+  }, []);
+
+  const handleLaunch = useCallback(async (game: InstalledGame) => {
+    setLaunchingGameId(game.id);
+    setLaunchError('');
+    try {
+      const launch = await launchStream(game.id);
+      if (window.openStroid?.openStream) {
+        await window.openStroid.openStream(launch);
+      } else {
+        window.open(launch.streamingUrl, '_blank', 'noopener,noreferrer');
+      }
+    } catch (err: unknown) {
+      const msg =
+        (err as { response?: { data?: { message?: string } } })?.response?.data?.message ||
+        `Failed to launch ${game.name}.`;
+      setLaunchError(msg);
+    } finally {
+      setLaunchingGameId(null);
     }
   }, []);
 
@@ -87,6 +110,21 @@ export function LibraryPage() {
 
       {loadState === 'loading' && <LibrarySkeleton />}
 
+      {launchError && (
+        <Alert
+          icon={<IconAlertCircle size={20} />}
+          title="Could not start stream"
+          color="red"
+          variant="light"
+          radius="lg"
+          mb="lg"
+          withCloseButton
+          onClose={() => setLaunchError('')}
+        >
+          {launchError}
+        </Alert>
+      )}
+
       {loadState === 'error' && (
         <Alert
           icon={<IconAlertCircle size={20} />}
@@ -119,7 +157,12 @@ export function LibraryPage() {
           spacing="lg"
         >
           {games.map((game) => (
-            <GameCard key={game.id} game={game} />
+            <GameCard
+              key={game.id}
+              game={game}
+              isLaunching={launchingGameId === game.id}
+              onLaunch={handleLaunch}
+            />
           ))}
         </SimpleGrid>
       )}
@@ -131,7 +174,15 @@ export function LibraryPage() {
   );
 }
 
-function GameCard({ game }: { game: InstalledGame }) {
+function GameCard({
+  game,
+  isLaunching,
+  onLaunch,
+}: {
+  game: InstalledGame;
+  isLaunching: boolean;
+  onLaunch: (game: InstalledGame) => void;
+}) {
   const coverUrl = game.cover || game.icon;
 
   return (
@@ -154,6 +205,7 @@ function GameCard({ game }: { game: InstalledGame }) {
           },
         },
       }}
+      onClick={() => onLaunch(game)}
     >
       <Box style={{ position: 'relative', aspectRatio: '3/4', overflow: 'hidden' }}>
         {coverUrl ? (
@@ -210,6 +262,20 @@ function GameCard({ game }: { game: InstalledGame }) {
               Installed
             </Badge>
           )}
+          <Button
+            mt="sm"
+            size="xs"
+            radius="md"
+            color="brand"
+            leftSection={<IconPlayerPlay size={14} />}
+            loading={isLaunching}
+            onClick={(event) => {
+              event.stopPropagation();
+              onLaunch(game);
+            }}
+          >
+            Play
+          </Button>
         </Box>
       </Box>
     </Card>

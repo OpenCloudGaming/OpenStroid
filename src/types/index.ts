@@ -139,6 +139,28 @@ export interface InstalledGame {
   [key: string]: unknown;
 }
 
+export interface StreamLaunchCookie {
+  name: string;
+  value: string;
+  domain: string;
+  path: string;
+  expires: number;
+  httpOnly: boolean;
+  secure: boolean;
+  sameSite: string;
+}
+
+export interface StreamLaunchResponse {
+  appId: number;
+  app: Record<string, unknown> | null;
+  sessionId: string;
+  streamingUrl: string;
+  gateways: unknown[];
+  localStorage: Record<string, unknown>;
+  cookies: StreamLaunchCookie[];
+  startPayload: Record<string, unknown>;
+}
+
 export interface ApiError {
   message?: string;
   error_code?: number;

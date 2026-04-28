@@ -10,13 +10,49 @@ import {
 } from './lib/authCapture.js';
 import { clearSession, createSession, readSession, writeSession } from './lib/session.js';
 import {
+  dequeueStreamingSessionUpstream,
+  enqueueStreamingSessionUpstream,
+  getActiveSessionsUpstream,
+  getApplicationUpstream,
+  getCookieAuthCookies,
   getInstalledGamesUpstream,
+  getLastSessionLiveUpstream,
+  getLastSessionUpstream,
+  getStreamingGatewaysUpstream,
   getUpstreamUser,
   isCookieAuthToken,
   logoutUpstream,
   normalizeError,
+  startStreamingSessionV1Upstream,
+  startStreamingSessionV2Upstream,
   withRefresh,
 } from './lib/upstream.js';
+import type { BridgeSession } from './lib/session.js';
+
+interface StreamLaunchResult {
+  appId: number;
+  app: Record<string, unknown> | null;
+  sessionId: string;
+  streamingUrl: string;
+  gateways: unknown[];
+  localStorage: Record<string, unknown>;
+  cookies: ReturnType<typeof getCookieAuthCookies>;
+  startPayload: Record<string, unknown>;
+  launchDiagnostics?: Record<string, unknown>;
+}
+
+interface SessionEntry {
+  sessionId: string;
+  status: string;
+  appId: string;
+}
+
+interface SessionSignals {
+  sessionTokens: string[];
+  sessionQueries: string[];
+  queuedSessionIds: string[];
+  payloads: Array<{ source: string; payload: Record<string, unknown> }>;
+}
 
 export function createBridgeApp() {
   const app = express();
@@ -62,6 +98,383 @@ export function createBridgeApp() {
       return null;
     }
     return session;
+  }
+
+  function findNestedString(value: unknown, keys: string[], depth = 0): string | null {
+    if (!value || typeof value !== 'object' || depth > 5) return null;
+
+    for (const [key, nestedValue] of Object.entries(value as Record<string, unknown>)) {
+      if (keys.includes(key) && typeof nestedValue === 'string' && nestedValue) {
+        return nestedValue;
+      }
+    }
+
+    for (const nestedValue of Object.values(value as Record<string, unknown>)) {
+      const found = findNestedString(nestedValue, keys, depth + 1);
+      if (found) return found;
+    }
+
+    return null;
+  }
+
+  function walk(value: unknown, visit: (leaf: unknown, key: string) => void, key = '') {
+    if (value == null) return;
+    if (Array.isArray(value)) {
+      value.forEach((item) => walk(item, visit, key));
+      return;
+    }
+    if (typeof value === 'object') {
+      for (const [entryKey, entryValue] of Object.entries(value as Record<string, unknown>)) {
+        walk(entryValue, visit, entryKey);
+      }
+      return;
+    }
+    visit(value, key);
+  }
+
+  function uniq<T>(values: T[]): T[] {
+    return [...new Set(values)];
+  }
+
+  function findNestedGateways(value: unknown, keys: string[], depth = 0): unknown[] {
+    if (!value || typeof value !== 'object' || depth > 5) return [];
+
+    for (const [key, nestedValue] of Object.entries(value as Record<string, unknown>)) {
+      if (keys.includes(key)) {
+        if (Array.isArray(nestedValue)) return nestedValue;
+        if (nestedValue && typeof nestedValue === 'object') return [nestedValue];
+        if (typeof nestedValue === 'string' && nestedValue) return [nestedValue];
+      }
+    }
+
+    for (const nestedValue of Object.values(value as Record<string, unknown>)) {
+      const found = findNestedGateways(nestedValue, keys, depth + 1);
+      if (found.length > 0) return found;
+    }
+
+    return [];
+  }
+
+  function extractSessionIdFromUrl(url: string): string | null {
+    try {
+      return new URL(url, serverConfig.upstreamBaseUrl).searchParams.get('sessionId');
+    } catch {
+      return null;
+    }
+  }
+
+  function extractErrorCode(error: unknown): number | null {
+    const normalized = normalizeError(error);
+    const text = `${normalized.message} ${JSON.stringify(normalized.details ?? '')}`;
+    const match = text.match(/"?error_code"?\s*:?\s*(\d{4,})/);
+    return match ? Number(match[1]) : null;
+  }
+
+  function normalizeStatus(value: unknown): string {
+    return String(value ?? '').trim().toUpperCase();
+  }
+
+  function isUuidLike(value: unknown): value is string {
+    return typeof value === 'string' &&
+      /\b[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\b/i.test(value);
+  }
+
+  function isNotReadySessionStatus(status: unknown): boolean {
+    const value = normalizeStatus(status);
+    if (!value) return false;
+
+    return new Set([
+      'EN',
+      'QUEUE',
+      'QUEUED',
+      'WAIT',
+      'WAITING',
+      'PENDING',
+      'INIT',
+      'INITIALIZING',
+      'STARTING',
+      'CREATING',
+      'NEW',
+      'END',
+      'ENDED',
+      'FINISHED',
+      'TERMINATED',
+      'TIMEOUT',
+      'EXPIRED',
+      'FAILED',
+      'ERROR',
+      'CANCELLED',
+      'CANCELED',
+      'CLOSED',
+    ]).has(value);
+  }
+
+  function normalizeQueryCandidate(value: unknown): string {
+    const str = String(value ?? '').trim();
+    if (!str) return '';
+    if (str.startsWith('?')) return str;
+    if (str.includes('?')) return str.slice(str.indexOf('?'));
+    if (str.includes('=')) return `?${str}`;
+    return '';
+  }
+
+  function getSessionIdFromQuery(query: unknown): string | null {
+    const normalized = normalizeQueryCandidate(query);
+    if (!normalized) return null;
+    const params = new URLSearchParams(normalized.replace(/^\?/, ''));
+    return params.get('sessionId') ?? params.get('sessionid') ?? params.get('session');
+  }
+
+  function extractSessionTokens(payload: unknown): string[] {
+    const tokens: string[] = [];
+    walk(payload, (leaf, key) => {
+      if (typeof leaf !== 'string' || !/^(session)?token$/i.test(key)) return;
+      const token = leaf.trim();
+      if (token.length >= 8) tokens.push(token);
+    });
+    return uniq(tokens);
+  }
+
+  function extractSessionQueries(payload: unknown): string[] {
+    const queries: string[] = [];
+    walk(payload, (leaf) => {
+      if (typeof leaf !== 'string') return;
+      const query = normalizeQueryCandidate(leaf);
+      if (query && getSessionIdFromQuery(query)) queries.push(query);
+    });
+    return uniq(queries);
+  }
+
+  function extractSessionEntries(payload: unknown): SessionEntry[] {
+    const entries: SessionEntry[] = [];
+
+    function visit(value: unknown) {
+      if (value == null) return;
+      if (Array.isArray(value)) {
+        value.forEach(visit);
+        return;
+      }
+      if (typeof value !== 'object') return;
+
+      const record = value as Record<string, unknown>;
+      const sessionIds = [record.sessionId, record.sessionID, record.sid].filter(isUuidLike);
+      if (sessionIds.length > 0) {
+        const appId = record.appId ?? record.applicationId ?? record.gameId ?? '';
+        const status = record.status ?? record.sessionStatus ?? record.state ?? record.stage ?? '';
+        sessionIds.forEach((sessionId) => {
+          entries.push({
+            sessionId: sessionId.trim(),
+            status: normalizeStatus(status),
+            appId: appId == null || appId === '' ? '' : String(appId).trim(),
+          });
+        });
+      }
+
+      Object.values(record).forEach(visit);
+    }
+
+    visit(payload);
+    return entries;
+  }
+
+  function collectSessionSignals(appId: number, payloads: Array<{ source: string; payload: Record<string, unknown> }>): SessionSignals {
+    const appIdText = String(appId);
+    const sessionTokens: string[] = [];
+    const sessionQueries: string[] = [];
+    const queuedSessionIds: string[] = [];
+    const blockedSessionIds = new Set<string>();
+
+    for (const { payload } of payloads) {
+      extractSessionEntries(payload).forEach((entry) => {
+        if (entry.appId && entry.appId !== appIdText) return;
+        if (isNotReadySessionStatus(entry.status)) {
+          queuedSessionIds.push(entry.sessionId);
+          blockedSessionIds.add(entry.sessionId);
+          return;
+        }
+        sessionQueries.push(`?sessionId=${entry.sessionId}`);
+      });
+
+      sessionTokens.push(...extractSessionTokens(payload));
+      sessionQueries.push(...extractSessionQueries(payload));
+    }
+
+    return {
+      sessionTokens: uniq(sessionTokens),
+      sessionQueries: uniq(sessionQueries).filter((query) => {
+        const sessionId = getSessionIdFromQuery(query);
+        return !sessionId || !blockedSessionIds.has(sessionId);
+      }),
+      queuedSessionIds: uniq(queuedSessionIds),
+      payloads,
+    };
+  }
+
+  async function optionalPayload(source: string, request: () => Promise<Record<string, unknown>>) {
+    try {
+      return { source, payload: await request() };
+    } catch {
+      return null;
+    }
+  }
+
+  function delay(ms: number) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  async function discoverSessionSignals(accessToken: string, appId: number, seedPayload: Record<string, unknown>): Promise<SessionSignals> {
+    const payloads = [
+      { source: 'enqueue', payload: seedPayload },
+      await optionalPayload('last-session/live', () => getLastSessionLiveUpstream(accessToken)),
+      await optionalPayload('last-session', () => getLastSessionUpstream(accessToken)),
+      await optionalPayload('active-sessions', () => getActiveSessionsUpstream(accessToken)),
+    ].filter((item): item is { source: string; payload: Record<string, unknown> } => Boolean(item));
+
+    return collectSessionSignals(appId, payloads);
+  }
+
+  async function waitForStartableSession(accessToken: string, appId: number, enqueuePayload: Record<string, unknown>): Promise<SessionSignals> {
+    const deadline = Date.now() + 180_000;
+    let bestSignals = collectSessionSignals(appId, [{ source: 'enqueue', payload: enqueuePayload }]);
+
+    await delay(5_000);
+
+    while (Date.now() < deadline) {
+      const signals = await discoverSessionSignals(accessToken, appId, enqueuePayload);
+      if (signals.sessionTokens.length > 0 || signals.sessionQueries.some((query) => getSessionIdFromQuery(query))) {
+        return signals;
+      }
+      if (signals.queuedSessionIds.length > 0) {
+        bestSignals = signals;
+      }
+      await delay(2_000);
+    }
+
+    return bestSignals;
+  }
+
+  function createStreamingUrl(sessionId: string, startUrl?: string | null): string {
+    if (startUrl) {
+      try {
+        const parsed = new URL(startUrl, serverConfig.upstreamBaseUrl);
+        if (parsed.searchParams.get('sessionId')) {
+          return parsed.toString();
+        }
+      } catch {
+        // Fall back to the known official streaming entry point.
+      }
+    }
+
+    const url = new URL('/static/streaming/streaming.html', serverConfig.upstreamBaseUrl);
+    url.searchParams.set('sessionId', sessionId);
+    return url.toString();
+  }
+
+  function hasFallbackStartCode(error: unknown): boolean {
+    return extractErrorCode(error) === 340006;
+  }
+
+  async function launchStreamingSession(session: BridgeSession, appId: number): Promise<StreamLaunchResult> {
+    const accessToken = session.accessToken;
+    const appDetails = await getApplicationUpstream(accessToken, appId).catch(() => null);
+    let gateways: unknown[] = [];
+    let startPayload: Record<string, unknown> | null = null;
+    let startUrl: string | null = null;
+
+    let launchDiagnostics: Record<string, unknown> | undefined;
+    let useV1Fallback = false;
+
+    try {
+      const enqueuePayload = await enqueueStreamingSessionUpstream(accessToken, appId);
+      const signals = await waitForStartableSession(accessToken, appId, enqueuePayload);
+      launchDiagnostics = {
+        signalSources: signals.payloads.map((payload) => payload.source),
+        queuedSessionIds: signals.queuedSessionIds,
+        sessionTokenCount: signals.sessionTokens.length,
+        sessionQueryCount: signals.sessionQueries.length,
+      };
+
+      for (const sessionToken of signals.sessionTokens) {
+        try {
+          startPayload = await startStreamingSessionV2Upstream(accessToken, appId, sessionToken);
+          break;
+        } catch (error) {
+          const errorCode = extractErrorCode(error);
+          if (errorCode === 340005) {
+            await dequeueStreamingSessionUpstream(accessToken).catch(() => ({}));
+            const nextEnqueuePayload = await enqueueStreamingSessionUpstream(accessToken, appId);
+            const nextSignals = await waitForStartableSession(accessToken, appId, nextEnqueuePayload);
+            for (const nextToken of nextSignals.sessionTokens) {
+              startPayload = await startStreamingSessionV2Upstream(accessToken, appId, nextToken);
+              break;
+            }
+          }
+
+          if (startPayload) break;
+          if (errorCode === 340006) break;
+          if (errorCode === 340007 || normalizeError(error).status === 400) {
+            continue;
+          }
+          throw error;
+        }
+      }
+
+      if (!startPayload) {
+        const directSessionId = signals.sessionQueries.map(getSessionIdFromQuery).find(Boolean);
+        if (directSessionId) {
+          startPayload = { sessionId: directSessionId };
+        }
+      }
+    } catch (error) {
+      if (!hasFallbackStartCode(error)) {
+        throw error;
+      }
+      useV1Fallback = true;
+    }
+
+    if (!startPayload && useV1Fallback) {
+      startPayload = await startStreamingSessionV1Upstream(accessToken, appId);
+    }
+
+    if (!startPayload) {
+      const error = new Error('Timed out waiting for Boosteroid to provide a startable virtual machine.');
+      (error as Error & { status?: number; details?: unknown }).status = 504;
+      (error as Error & { details?: unknown }).details = launchDiagnostics;
+      throw error;
+    }
+
+    startUrl = findNestedString(startPayload, ['url', 'redirectUrl', 'streamingUrl']);
+    const sessionId =
+      findNestedString(startPayload, ['sessionId', 'sessionID', 'sid']) ??
+      (startUrl ? extractSessionIdFromUrl(startUrl) : null);
+
+    if (!sessionId) {
+      const error = new Error('Boosteroid did not return a streaming session id.');
+      (error as Error & { status?: number; details?: unknown }).status = 502;
+      (error as Error & { details?: unknown }).details = startPayload;
+      throw error;
+    }
+
+    gateways = findNestedGateways(startPayload, ['gateways', 'gateway', 'gw']);
+    if (gateways.length === 0) {
+      gateways = await getStreamingGatewaysUpstream(accessToken).catch(() => []);
+    }
+
+    return {
+      appId,
+      app: appDetails,
+      sessionId,
+      streamingUrl: createStreamingUrl(sessionId, startUrl),
+      gateways,
+      localStorage: {
+        appId: String(appId),
+        gateway_pings: gateways,
+        homeLink: serverConfig.upstreamBaseUrl,
+      },
+      cookies: getCookieAuthCookies(accessToken),
+      startPayload,
+      launchDiagnostics,
+    };
   }
 
   function redactDebugValue(key: string, value: unknown): unknown {
@@ -344,6 +757,27 @@ export function createBridgeApp() {
       }
 
       clearSession(res);
+      next(error);
+    }
+  });
+
+  app.post('/stream/launch', async (req, res, next) => {
+    const session = requireSession(req, res);
+    if (!session) return;
+
+    const appId = Number(req.body?.appId);
+    if (!Number.isInteger(appId) || appId <= 0) {
+      res.status(400).json({ message: 'A valid appId is required.' });
+      return;
+    }
+
+    try {
+      const launch = await launchStreamingSession(session, appId);
+      res.json(launch);
+    } catch (error) {
+      if (!isCookieAuthToken(session.accessToken)) {
+        clearSession(res);
+      }
       next(error);
     }
   });

@@ -685,7 +685,7 @@ class AuthCaptureManager {
 
     if (cookieTokens.accessToken && cookieTokens.refreshToken && cookieHeader) {
       const sessionUser = createCookieSessionUser(observedUser, storageUser);
-      const cookieAuthToken = createCookieAuthToken(cookieHeader);
+      const cookieAuthToken = createCookieAuthToken(cookieHeader, allCookies);
       capture.bridgeSession = createSession({
         accessToken: cookieAuthToken,
         refreshToken: refreshToken ?? cookieAuthToken,

@@ -19,13 +19,29 @@ export interface UpstreamTokens {
   user_data?: unknown;
 }
 
+export interface CookieAuthCookie {
+  name: string;
+  value: string;
+  domain: string;
+  path: string;
+  expires: number;
+  httpOnly: boolean;
+  secure: boolean;
+  sameSite: string;
+}
+
+interface CookieAuthSession {
+  cookieHeader: string;
+  cookies: CookieAuthCookie[];
+}
+
 const refreshRequests = new Map<string, Promise<UpstreamTokens>>();
 const COOKIE_AUTH_PREFIX = 'cookie-auth:';
-const cookieAuthSessions = new Map<string, string>();
+const cookieAuthSessions = new Map<string, CookieAuthSession>();
 
-export function createCookieAuthToken(cookieHeader: string): string {
+export function createCookieAuthToken(cookieHeader: string, cookies: CookieAuthCookie[] = []): string {
   const id = randomUUID();
-  cookieAuthSessions.set(id, cookieHeader);
+  cookieAuthSessions.set(id, { cookieHeader, cookies });
   return `${COOKIE_AUTH_PREFIX}${id}`;
 }
 
@@ -36,7 +52,7 @@ export function readCookieAuthToken(value: string): string | null {
 
   try {
     const payload = value.slice(COOKIE_AUTH_PREFIX.length);
-    const stored = cookieAuthSessions.get(payload);
+    const stored = cookieAuthSessions.get(payload)?.cookieHeader;
     if (stored) {
       return stored;
     }
@@ -51,17 +67,49 @@ export function isCookieAuthToken(value: string): boolean {
   return Boolean(readCookieAuthToken(value));
 }
 
+export function getCookieAuthCookies(value: string): CookieAuthCookie[] {
+  if (!value.startsWith(COOKIE_AUTH_PREFIX)) {
+    return [];
+  }
+
+  return cookieAuthSessions.get(value.slice(COOKIE_AUTH_PREFIX.length))?.cookies ?? [];
+}
+
 function upstreamAuthHeaders(accessToken: string): Record<string, string> {
   const cookieHeader = readCookieAuthToken(accessToken);
   if (cookieHeader) {
-    return {
+    const cookies = getCookieAuthCookies(accessToken);
+    const headers: Record<string, string> = {
       Cookie: cookieHeader,
       Origin: serverConfig.upstreamBaseUrl,
       Referer: `${serverConfig.upstreamBaseUrl}/`,
     };
+    const accessCookie = cookies.find((cookie) => cookie.name === 'access_token');
+    const boosteroidAuthCookie = cookies.find((cookie) => cookie.name === 'boosteroid_auth');
+    if (accessCookie?.value) {
+      headers.Authorization = normalizeAuthorizationValue(accessCookie.value);
+    }
+    if (boosteroidAuthCookie?.value) {
+      headers['Authorization-Data'] = boosteroidAuthCookie.value;
+    }
+    return headers;
   }
 
   return { Authorization: normalizeAuthorizationValue(accessToken) };
+}
+
+async function upstreamGet<T>(accessToken: string, path: string): Promise<T> {
+  const { data } = await upstreamClient.get(path, {
+    headers: upstreamAuthHeaders(accessToken),
+  });
+  return data as T;
+}
+
+async function upstreamPost<T>(accessToken: string, path: string, body: unknown = {}): Promise<T> {
+  const { data } = await upstreamClient.post(path, body, {
+    headers: upstreamAuthHeaders(accessToken),
+  });
+  return data as T;
 }
 
 function normalizeAuthorizationValue(accessToken: string): string {
@@ -140,17 +188,12 @@ export async function loginUpstream(payload: Record<string, string | boolean>): 
 }
 
 export async function getUpstreamUser(accessToken: string): Promise<Record<string, unknown>> {
-  const { data } = await upstreamClient.get('/api/v1/user', {
-    headers: upstreamAuthHeaders(accessToken),
-  });
-
+  const data = await upstreamGet<unknown>(accessToken, '/api/v1/user');
   return unwrapRecord(data);
 }
 
 export async function getInstalledGamesUpstream(accessToken: string): Promise<unknown[]> {
-  const { data } = await upstreamClient.get('/api/v1/boostore/applications/installed', {
-    headers: upstreamAuthHeaders(accessToken),
-  });
+  const data = await upstreamGet<unknown>(accessToken, '/api/v1/boostore/applications/installed');
 
   if (Array.isArray(data)) return data;
   if (data && typeof data === 'object' && Array.isArray((data as { data?: unknown[] }).data)) {
@@ -161,6 +204,55 @@ export async function getInstalledGamesUpstream(accessToken: string): Promise<un
   }
 
   return [];
+}
+
+export async function getApplicationUpstream(accessToken: string, appId: number): Promise<Record<string, unknown>> {
+  const data = await upstreamGet<unknown>(accessToken, `/api/v1/boostore/applications/${appId}`);
+  return unwrapRecord(data);
+}
+
+export async function getStreamingGatewaysUpstream(accessToken: string): Promise<unknown[]> {
+  const data = await upstreamGet<unknown>(accessToken, '/api/v1/streaming/gateways');
+  if (Array.isArray(data)) return data;
+  if (data && typeof data === 'object' && Array.isArray((data as { data?: unknown[] }).data)) {
+    return (data as { data: unknown[] }).data;
+  }
+  return [];
+}
+
+export async function enqueueStreamingSessionUpstream(accessToken: string, appId: number): Promise<Record<string, unknown>> {
+  const data = await upstreamPost<unknown>(accessToken, '/api/v2/streaming/session/enqueue', { appId });
+  return unwrapRecord(data);
+}
+
+export async function dequeueStreamingSessionUpstream(accessToken: string): Promise<Record<string, unknown>> {
+  const data = await upstreamPost<unknown>(accessToken, '/api/v2/streaming/session/dequeue', {});
+  return unwrapRecord(data);
+}
+
+export async function getLastSessionUpstream(accessToken: string): Promise<Record<string, unknown>> {
+  const data = await upstreamGet<unknown>(accessToken, '/api/v1/streaming/user/last-session');
+  return unwrapRecord(data);
+}
+
+export async function getLastSessionLiveUpstream(accessToken: string): Promise<Record<string, unknown>> {
+  const data = await upstreamGet<unknown>(accessToken, '/api/v1/streaming/user/last-session/live');
+  return unwrapRecord(data);
+}
+
+export async function getActiveSessionsUpstream(accessToken: string): Promise<Record<string, unknown>> {
+  const data = await upstreamGet<unknown>(accessToken, '/api/v1/streaming/user/active-sessions');
+  return unwrapRecord(data);
+}
+
+export async function startStreamingSessionV1Upstream(accessToken: string, appId: number): Promise<Record<string, unknown>> {
+  const data = await upstreamPost<unknown>(accessToken, '/api/v1/streaming/session/start', { appId });
+  return unwrapRecord(data);
+}
+
+export async function startStreamingSessionV2Upstream(accessToken: string, appId: number, sessionToken: string): Promise<Record<string, unknown>> {
+  const data = await upstreamPost<unknown>(accessToken, '/api/v2/streaming/session/start', { appId, sessionToken });
+  return unwrapRecord(data);
 }
 
 export async function logoutUpstream(accessToken: string): Promise<void> {
