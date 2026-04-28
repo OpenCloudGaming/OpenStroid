@@ -5,9 +5,9 @@
   "description": "Open-source cloud gaming client",
   "type": "module",
   "scripts": {
-    "dev": "concurrently -k \"npm:dev:web\" \"npm:dev:electron\"",
+    "dev": "concurrently -k -n web,electron \"bun run dev:web\" \"bun run dev:electron\"",
     "dev:web": "vite",
-    "dev:electron": "sh -c 'until curl -sf http://127.0.0.1:3000 >/dev/null 2>&1; do sleep 1; done; NODE_OPTIONS=\"--import tsx\" ELECTRON_RENDERER_URL=http://127.0.0.1:3000 electron electron/main.ts'",
+    "dev:electron": "node tools/run-electron-dev.mjs",
     "dev:bridge": "tsx watch server/index.ts",
     "build": "tsc -b && tsc -p tsconfig.server.json && tsc -p tsconfig.electron.json && vite build",
     "lint": "eslint .",

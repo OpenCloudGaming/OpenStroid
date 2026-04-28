@@ -16,9 +16,9 @@ OpenStroid is now an Electron-first desktop client.
 ## Local development
 
 ```bash
-npm install
+bun install
 cp .env.example .env
-npm run dev
+bun run dev
 ```
 
 What runs in development:
@@ -133,15 +133,15 @@ extension/
 
 | Command | Description |
 |---|---|
-| `npm run dev` | Start Vite and launch the Electron desktop shell |
-| `npm run dev:web` | Start the Vite renderer only |
-| `npm run dev:electron` | Launch Electron against the dev renderer |
-| `npm run dev:bridge` | Run the local bridge without Electron |
-| `npm run build` | Type-check and build renderer, bridge, and Electron main process |
-| `npm run start` | Run the built Electron desktop app |
-| `npm run start:bridge` | Run only the built local bridge |
-| `npm run preview` | Preview the frontend build |
-| `npm run lint` | Run ESLint |
+| `bun run dev` | Start Vite and launch the Electron desktop shell |
+| `bun run dev:web` | Start the Vite renderer only |
+| `bun run dev:electron` | Launch Electron against the dev renderer |
+| `bun run dev:bridge` | Run the local bridge without Electron |
+| `bun run build` | Type-check and build renderer, bridge, and Electron main process |
+| `bun run start` | Run the built Electron desktop app |
+| `bun run start:bridge` | Run only the built local bridge |
+| `bun run preview` | Preview the frontend build |
+| `bun run lint` | Run ESLint |
 
 ## License
 

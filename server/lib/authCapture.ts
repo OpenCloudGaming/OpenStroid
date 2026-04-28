@@ -103,7 +103,14 @@ export interface ExtensionCaptureSubmission {
   finalUrl?: string | null;
   observedResponses?: CaptureEvent[];
   allCookies?: StoredCookie[];
+  storageItems?: ExtensionStorageItem[];
   extensionMetadata?: Record<string, unknown>;
+}
+
+export interface ExtensionStorageItem {
+  area: 'localStorage' | 'sessionStorage';
+  key: string;
+  value: string;
 }
 
 interface CaptureRuntime {
@@ -229,6 +236,67 @@ function extractTokensFromEvents(events: CaptureEvent[]): { accessToken: string 
   }
 
   return { accessToken: null, refreshToken: null };
+}
+
+function looksLikeJwt(value: string): boolean {
+  return /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(value);
+}
+
+function tokenKeyScore(key: string, tokenKind: 'access' | 'refresh'): number {
+  const normalized = key.toLowerCase();
+  const hasToken = normalized.includes('token');
+  const hasKind = normalized.includes(tokenKind);
+  if (hasKind && hasToken) return 3;
+  if (hasKind) return 2;
+  if (hasToken) return 1;
+  return 0;
+}
+
+function collectStorageCandidates(key: string, value: unknown, depth = 0): Array<{ key: string; value: string }> {
+  if (depth > 4) return [];
+  if (typeof value === 'string') return [{ key, value }];
+  if (!value || typeof value !== 'object') return [];
+
+  const candidates: Array<{ key: string; value: string }> = [];
+  for (const [nestedKey, nestedValue] of Object.entries(value as Record<string, unknown>)) {
+    candidates.push(...collectStorageCandidates(`${key}.${nestedKey}`, nestedValue, depth + 1));
+  }
+  return candidates;
+}
+
+function extractTokensFromStorage(storageItems: ExtensionStorageItem[]): { accessToken: string | null; refreshToken: string | null } {
+  let accessToken: string | null = null;
+  let refreshToken: string | null = null;
+  let accessScore = 0;
+  let refreshScore = 0;
+
+  for (const item of storageItems) {
+    const candidates = [{ key: item.key, value: item.value }];
+    try {
+      const parsed = JSON.parse(item.value) as unknown;
+      candidates.push(...collectStorageCandidates(item.key, parsed));
+    } catch {
+      // Plain storage value.
+    }
+
+    for (const { key, value } of candidates) {
+      if (!value) continue;
+
+      const accessCandidateScore = tokenKeyScore(key, 'access');
+      if (accessCandidateScore > accessScore && looksLikeJwt(value)) {
+        accessToken = value;
+        accessScore = accessCandidateScore;
+      }
+
+      const refreshCandidateScore = tokenKeyScore(key, 'refresh');
+      if (refreshCandidateScore > refreshScore) {
+        refreshToken = value;
+        refreshScore = refreshCandidateScore;
+      }
+    }
+  }
+
+  return { accessToken, refreshToken };
 }
 
 async function ensureArtifactDir(): Promise<void> {
@@ -423,19 +491,30 @@ class AuthCaptureManager {
             source: 'extension',
           }))
       : [];
+    const storageItems = Array.isArray(submission.storageItems)
+      ? submission.storageItems
+          .filter((item): item is ExtensionStorageItem => (
+            item &&
+            typeof item === 'object' &&
+            (item.area === 'localStorage' || item.area === 'sessionStorage') &&
+            typeof item.key === 'string' &&
+            typeof item.value === 'string'
+          ))
+      : [];
 
     capture.events = observedResponses;
     capture.updatedAtMs = Date.now();
 
     const cookieTokens = extractTokensFromCookies(allCookies);
     const payloadTokens = extractTokensFromEvents(observedResponses);
-    const accessToken = cookieTokens.accessToken ?? payloadTokens.accessToken;
-    const refreshToken = cookieTokens.refreshToken ?? payloadTokens.refreshToken;
+    const storageTokens = extractTokensFromStorage(storageItems);
+    const accessToken = payloadTokens.accessToken ?? storageTokens.accessToken ?? cookieTokens.accessToken;
+    const refreshToken = payloadTokens.refreshToken ?? storageTokens.refreshToken ?? cookieTokens.refreshToken;
 
     if (!accessToken || !refreshToken) {
       const artifact = this.buildSubmittedArtifact(capture, submission, allCookies, observedResponses);
-      await this.finalize(capture, 'failed', 'Extension capture did not include usable upstream access and refresh tokens.', artifact);
-      return capture.artifact as CaptureArtifact;
+      this.keepExtensionCaptureWaiting(capture, 'Extension capture did not include usable upstream access and refresh tokens.', artifact);
+      return capture.artifact ?? artifact;
     }
 
     try {
@@ -466,8 +545,8 @@ class AuthCaptureManager {
     } catch (error) {
       const artifact = this.buildSubmittedArtifact(capture, submission, allCookies, observedResponses);
       const message = error instanceof Error ? `Extension capture token validation failed: ${error.message}` : 'Extension capture token validation failed.';
-      await this.finalize(capture, 'failed', message, artifact);
-      return capture.artifact as CaptureArtifact;
+      this.keepExtensionCaptureWaiting(capture, message, artifact);
+      return capture.artifact ?? artifact;
     }
   }
 
@@ -504,6 +583,29 @@ class AuthCaptureManager {
   private pushEvent(capture: CaptureRuntime, event: CaptureEvent): void {
     capture.events.push(event);
     capture.updatedAtMs = Date.now();
+  }
+
+  private keepExtensionCaptureWaiting(capture: CaptureRuntime, message: string, artifact: CaptureArtifact): void {
+    capture.status = 'awaiting_user';
+    capture.updatedAtMs = Date.now();
+    if (capture.errors.at(-1) !== message) {
+      capture.errors.push(message);
+    }
+    this.pushEvent(capture, {
+      timestamp: new Date().toISOString(),
+      type: 'error',
+      source: 'extension',
+      message,
+    });
+
+    artifact.status = capture.status;
+    artifact.updatedAt = new Date(capture.updatedAtMs).toISOString();
+    artifact.completedAt = null;
+    artifact.errors = [...capture.errors];
+    artifact.bridgeSession = null;
+    artifact.userPayload = null;
+    artifact.eventCount = capture.events.length;
+    capture.artifact = artifact;
   }
 
   private createBaseArtifact(capture: CaptureRuntime): CaptureArtifact {

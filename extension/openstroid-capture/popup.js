@@ -3,6 +3,8 @@ const pairingInput = document.getElementById('pairingCode');
 const statusElement = document.getElementById('status');
 const saveButton = document.getElementById('save');
 const openButton = document.getElementById('open');
+const captureNowButton = document.getElementById('captureNow');
+const refreshButton = document.getElementById('refresh');
 
 function setStatus(state) {
   statusElement.textContent = JSON.stringify(state, null, 2);
@@ -34,5 +36,11 @@ saveButton.addEventListener('click', () => {
 openButton.addEventListener('click', () => {
   chrome.tabs.create({ url: 'https://boosteroid.com/' });
 });
+
+captureNowButton.addEventListener('click', () => {
+  chrome.runtime.sendMessage({ type: 'openstroid:submit-now' }, () => refreshState());
+});
+
+refreshButton.addEventListener('click', refreshState);
 
 refreshState();

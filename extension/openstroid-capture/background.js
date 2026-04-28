@@ -11,10 +11,15 @@ const RELEVANT_PATH_PATTERNS = [
   '/session',
 ];
 const MAX_EVENTS = 120;
+const MIN_SUBMISSION_INTERVAL_MS = 2500;
 
 let observedResponses = [];
+let latestStorageItems = [];
 let lastSubmittedCaptureId = null;
 let submissionInFlight = false;
+let lastSubmissionAttemptAt = 0;
+let lastActiveLookup = null;
+let lastSubmissionResult = null;
 
 function isRelevantUrl(url) {
   return RELEVANT_PATH_PATTERNS.some((pattern) => url.includes(pattern));
@@ -38,22 +43,49 @@ async function getStoredState() {
 async function getActiveCapture() {
   const { backendBaseUrl, pairingCode } = await getStoredState();
   if (!pairingCode) {
+    lastActiveLookup = {
+      ok: false,
+      checkedAt: new Date().toISOString(),
+      message: 'No pairing code saved.',
+    };
     return null;
   }
 
-  const response = await fetch(`${backendBaseUrl}/auth/extension/active`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({ pairingCode }),
-  });
-  if (!response.ok) {
+  try {
+    const response = await fetch(`${backendBaseUrl}/auth/extension/active`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ pairingCode }),
+    });
+    if (!response.ok) {
+      const errorPayload = await response.json().catch(() => null);
+      lastActiveLookup = {
+        ok: false,
+        checkedAt: new Date().toISOString(),
+        status: response.status,
+        message: errorPayload?.message || 'No active capture session found.',
+      };
+      return null;
+    }
+
+    const data = await response.json();
+    lastActiveLookup = {
+      ok: true,
+      checkedAt: new Date().toISOString(),
+      id: data.id,
+      timeoutAt: data.timeoutAt,
+    };
+    return { backendBaseUrl, pairingCode, data };
+  } catch (error) {
+    lastActiveLookup = {
+      ok: false,
+      checkedAt: new Date().toISOString(),
+      message: error instanceof Error ? error.message : String(error),
+    };
     return null;
   }
-
-  const data = await response.json();
-  return { backendBaseUrl, pairingCode, data };
 }
 
 async function collectCookiesForDomain(domain) {
@@ -85,6 +117,12 @@ async function collectRelevantCookies() {
 
 async function submitCapture(reason) {
   if (submissionInFlight) {
+    lastSubmissionResult = {
+      ok: false,
+      submittedAt: new Date().toISOString(),
+      reason,
+      message: 'Submission already in flight.',
+    };
     return;
   }
 
@@ -92,23 +130,60 @@ async function submitCapture(reason) {
   try {
     const active = await getActiveCapture();
     if (!active) {
+      lastSubmissionResult = {
+        ok: false,
+        submittedAt: new Date().toISOString(),
+        reason,
+        message: 'No active capture session for the saved pairing code.',
+      };
       return;
     }
 
     const { backendBaseUrl, pairingCode, data } = active;
     if (lastSubmittedCaptureId === data.id) {
+      lastSubmissionResult = {
+        ok: true,
+        submittedAt: new Date().toISOString(),
+        reason,
+        id: data.id,
+        status: 'already_succeeded',
+      };
       return;
     }
 
     const allCookies = await collectRelevantCookies();
-    const authCookiePresent = allCookies.some((cookie) => AUTH_COOKIE_NAMES.includes(cookie.name));
     const sawRelevantAuthPayload = observedResponses.some((event) =>
       event.url && (event.url.includes('/api/v1/auth/login') || event.url.includes('/api/v1/auth/refresh-token')),
     );
+    const sawStorageTokenCandidate = latestStorageItems.some((item) =>
+      /access|refresh|token|auth|session/i.test(item.key) ||
+      /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(item.value),
+    );
+    const sawFreshAuthCookieChange = reason.startsWith('cookie:');
 
-    if (!authCookiePresent && !sawRelevantAuthPayload) {
+    if (!sawRelevantAuthPayload && !sawStorageTokenCandidate && !sawFreshAuthCookieChange) {
+      lastSubmissionResult = {
+        ok: false,
+        submittedAt: new Date().toISOString(),
+        reason,
+        id: data.id,
+        message: 'No fresh auth payload, storage token, or auth cookie change observed yet.',
+      };
       return;
     }
+
+    const now = Date.now();
+    if (now - lastSubmissionAttemptAt < MIN_SUBMISSION_INTERVAL_MS) {
+      lastSubmissionResult = {
+        ok: false,
+        submittedAt: new Date().toISOString(),
+        reason,
+        id: data.id,
+        message: 'Throttled briefly to avoid duplicate submissions.',
+      };
+      return;
+    }
+    lastSubmissionAttemptAt = now;
 
     const payload = {
       id: data.id,
@@ -116,6 +191,7 @@ async function submitCapture(reason) {
       finalUrl: observedResponses.at(-1)?.url || data.loginUrl,
       allCookies,
       observedResponses,
+      storageItems: latestStorageItems,
       extensionMetadata: {
         reason,
         backendBaseUrl,
@@ -133,10 +209,29 @@ async function submitCapture(reason) {
       body: JSON.stringify(payload),
     });
 
+    const result = await response.json().catch(() => null);
+    lastSubmissionResult = {
+      ok: response.ok,
+      submittedAt: new Date().toISOString(),
+      reason,
+      id: data.id,
+      status: result?.status,
+      statusCode: response.status,
+      message: result?.message,
+    };
+
     if (response.ok) {
-      lastSubmittedCaptureId = data.id;
+      if (result?.status === 'succeeded') {
+        lastSubmittedCaptureId = data.id;
+      }
     }
   } catch (error) {
+    lastSubmissionResult = {
+      ok: false,
+      submittedAt: new Date().toISOString(),
+      reason,
+      message: error instanceof Error ? error.message : String(error),
+    };
     console.error('OpenStroid extension capture failed', error);
   } finally {
     submissionInFlight = false;
@@ -178,14 +273,39 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     return true;
   }
 
+  if (message?.type === 'openstroid:storage-snapshot' && Array.isArray(message.storageItems)) {
+    latestStorageItems = message.storageItems.filter((item) =>
+      item &&
+      (item.area === 'localStorage' || item.area === 'sessionStorage') &&
+      typeof item.key === 'string' &&
+      typeof item.value === 'string'
+    );
+    void submitCapture('storage-snapshot');
+    sendResponse({ ok: true });
+    return true;
+  }
+
   if (message?.type === 'openstroid:get-state') {
-    void getStoredState().then(({ backendBaseUrl, pairingCode }) => {
+    void getStoredState().then(async ({ backendBaseUrl, pairingCode }) => {
+      if (pairingCode) {
+        await getActiveCapture();
+      }
       sendResponse({
         backendBaseUrl,
         pairingCode,
         observedEventCount: observedResponses.length,
+        storageItemCount: latestStorageItems.length,
         lastSubmittedCaptureId,
+        lastActiveLookup,
+        lastSubmissionResult,
       });
+    });
+    return true;
+  }
+
+  if (message?.type === 'openstroid:submit-now') {
+    void submitCapture('manual-popup').then(() => {
+      sendResponse({ ok: true, lastSubmissionResult });
     });
     return true;
   }
@@ -199,6 +319,8 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       : '';
     void chrome.storage.local.set({ backendBaseUrl, pairingCode }).then(() => {
       lastSubmittedCaptureId = null;
+      lastActiveLookup = null;
+      lastSubmissionResult = null;
       sendResponse({ ok: true });
     });
     return true;
