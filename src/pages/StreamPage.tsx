@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { ActionIcon, Badge, Box, Group, Paper, Stack, Text } from '@mantine/core';
-import { IconMaximize, IconPlayerStop } from '@tabler/icons-react';
+import { ActionIcon, Badge, Box, Group, Paper, Stack, Text, Tooltip } from '@mantine/core';
+import { IconMaximize, IconMouse, IconPlayerStop, IconPointer } from '@tabler/icons-react';
 import { useNavigate } from 'react-router-dom';
-import { OpenStroidStreamClient, type StreamCursorState } from '../stream/OpenStroidStreamClient';
+import { OpenStroidStreamClient, type StreamCursorState, type StreamMouseMode } from '../stream/OpenStroidStreamClient';
 import type { StreamLaunchResponse } from '../types';
 
 const FALLBACK_CURSOR_IMAGE =
@@ -30,6 +30,7 @@ export function StreamPage() {
   const [launch, setLaunch] = useState<StreamLaunchResponse | null | undefined>(undefined);
   const [cursor, setCursor] = useState<StreamCursorState>({ x: 0.5, y: 0.5, visible: false, imageUrl: null });
   const [videoBox, setVideoBox] = useState({ left: 0, top: 0, width: 0, height: 0 });
+  const [mouseMode, setMouseMode] = useState<StreamMouseMode>('absolute');
 
   const title = useMemo(() => {
     const name = launch?.app?.name;
@@ -82,6 +83,7 @@ export function StreamPage() {
         setLogs((current) => [message, ...current].slice(0, 16));
       },
       onCursor: setCursor,
+      onMouseMode: setMouseMode,
     });
     clientRef.current = client;
     void client.connect(launch.streamClientConfig).catch((error: unknown) => {
@@ -196,24 +198,49 @@ export function StreamPage() {
       />
       <audio ref={audioRef} autoPlay />
 
-      <img
-        src={cursor.imageUrl || FALLBACK_CURSOR_IMAGE}
-        alt=""
-        draggable={false}
+      <Box
         style={{
           position: 'fixed',
           left: cursorPosition.left,
           top: cursorPosition.top,
-          width: 28,
-          height: 36,
-          objectFit: 'contain',
+          width: 34,
+          height: 42,
           pointerEvents: 'none',
           zIndex: 8,
           opacity: cursor.visible ? 1 : 0,
           transform: 'translate(0, 0)',
-          filter: cursor.imageUrl ? 'drop-shadow(0 1px 2px rgba(0,0,0,0.75))' : 'none',
+          filter: 'drop-shadow(0 1px 2px rgba(0,0,0,0.75))',
         }}
-      />
+      >
+        <img
+          src={FALLBACK_CURSOR_IMAGE}
+          alt=""
+          draggable={false}
+          style={{
+            position: 'absolute',
+            left: 0,
+            top: 0,
+            width: 28,
+            height: 36,
+            objectFit: 'contain',
+          }}
+        />
+        {cursor.imageUrl && (
+          <img
+            src={cursor.imageUrl}
+            alt=""
+            draggable={false}
+            style={{
+              position: 'absolute',
+              left: 0,
+              top: 0,
+              width: 34,
+              height: 42,
+              objectFit: 'contain',
+            }}
+          />
+        )}
+      </Box>
 
       <Group
         justify="space-between"
@@ -243,6 +270,19 @@ export function StreamPage() {
         </Paper>
 
         <Group gap="xs" style={{ pointerEvents: 'auto' }}>
+          <Tooltip label={mouseMode === 'relative' ? 'Relative mouse' : 'Absolute mouse'} position="bottom">
+            <ActionIcon
+              variant="filled"
+              color={mouseMode === 'relative' ? 'cyan' : 'gray'}
+              size="lg"
+              aria-label={mouseMode === 'relative' ? 'Switch to absolute mouse mode' : 'Switch to relative mouse mode'}
+              onClick={() => {
+                void clientRef.current?.toggleMouseMode();
+              }}
+            >
+              {mouseMode === 'relative' ? <IconMouse size={18} /> : <IconPointer size={18} />}
+            </ActionIcon>
+          </Tooltip>
           <ActionIcon
             variant="filled"
             color="gray"
