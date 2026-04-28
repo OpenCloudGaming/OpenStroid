@@ -34,7 +34,6 @@ import {
   startLoginCapture,
 } from '../api';
 import { useAuth } from '../auth';
-import { AuthCaptureDebugPanel } from '../components/AuthCaptureDebugPanel';
 import type {
   ApiError,
   LoginCaptureMethod,
@@ -373,8 +372,6 @@ export function LoginPage() {
               </Stack>
             </Stack>
           </Paper>
-
-          <AuthCaptureDebugPanel title="Latest desktop bridge capture" />
         </Stack>
       </Center>
     </Box>

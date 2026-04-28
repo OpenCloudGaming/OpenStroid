@@ -1,4 +1,5 @@
 import axios, { AxiosError } from 'axios';
+import { randomUUID } from 'node:crypto';
 import { serverConfig } from '../config.js';
 import { createSession, type BridgeSession } from './session.js';
 import { sha256 } from './crypto.js';
@@ -20,9 +21,12 @@ export interface UpstreamTokens {
 
 const refreshRequests = new Map<string, Promise<UpstreamTokens>>();
 const COOKIE_AUTH_PREFIX = 'cookie-auth:';
+const cookieAuthSessions = new Map<string, string>();
 
 export function createCookieAuthToken(cookieHeader: string): string {
-  return `${COOKIE_AUTH_PREFIX}${Buffer.from(cookieHeader, 'utf8').toString('base64url')}`;
+  const id = randomUUID();
+  cookieAuthSessions.set(id, cookieHeader);
+  return `${COOKIE_AUTH_PREFIX}${id}`;
 }
 
 export function readCookieAuthToken(value: string): string | null {
@@ -31,7 +35,13 @@ export function readCookieAuthToken(value: string): string | null {
   }
 
   try {
-    return Buffer.from(value.slice(COOKIE_AUTH_PREFIX.length), 'base64url').toString('utf8');
+    const payload = value.slice(COOKIE_AUTH_PREFIX.length);
+    const stored = cookieAuthSessions.get(payload);
+    if (stored) {
+      return stored;
+    }
+
+    return Buffer.from(payload, 'base64url').toString('utf8');
   } catch {
     return null;
   }

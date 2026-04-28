@@ -64,6 +64,53 @@ export function createBridgeApp() {
     return session;
   }
 
+  function redactDebugValue(key: string, value: unknown): unknown {
+    const normalizedKey = key.toLowerCase();
+    if (
+      normalizedKey.includes('token') ||
+      normalizedKey.includes('cookie') ||
+      normalizedKey.includes('authorization') ||
+      normalizedKey.includes('session') ||
+      normalizedKey.includes('auth') ||
+      normalizedKey === 'value'
+    ) {
+      return typeof value === 'string' ? `[redacted:${value.length}]` : '[redacted]';
+    }
+
+    if (
+      normalizedKey.includes('email') ||
+      normalizedKey.includes('phone') ||
+      normalizedKey === 'ip' ||
+      normalizedKey.includes('address')
+    ) {
+      return typeof value === 'string' ? '[redacted]' : value;
+    }
+
+    return value;
+  }
+
+  function redactDebugPayload(value: unknown, key = ''): unknown {
+    const redacted = redactDebugValue(key, value);
+    if (redacted !== value) {
+      return redacted;
+    }
+
+    if (Array.isArray(value)) {
+      return value.map((item) => redactDebugPayload(item));
+    }
+
+    if (value && typeof value === 'object') {
+      return Object.fromEntries(
+        Object.entries(value as Record<string, unknown>).map(([entryKey, entryValue]) => [
+          entryKey,
+          redactDebugPayload(entryValue, entryKey),
+        ]),
+      );
+    }
+
+    return value;
+  }
+
   function sendCaptureStatus(req: Request, res: Response, captureId?: string) {
     const capture = authCaptureManager.getStatus(captureId);
     if (!capture) {
@@ -246,10 +293,10 @@ export function createBridgeApp() {
     }
 
     res.json({
-      artifact,
+      artifact: redactDebugPayload(artifact),
       artifactPath,
       requestedBy: {
-        email: session.user?.email ?? null,
+        email: session.user?.email ? '[redacted]' : null,
         updatedAt: session.updatedAt,
       },
     });
