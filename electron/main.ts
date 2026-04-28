@@ -1,6 +1,7 @@
 import type { AddressInfo } from 'node:net';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { randomUUID } from 'node:crypto';
 import { app, BrowserWindow, ipcMain, session, shell } from 'electron';
 import { startBridgeServer } from '../server/app.js';
 import { serverConfig } from '../server/config.js';
@@ -11,6 +12,8 @@ const __dirname = path.dirname(__filename);
 const preloadPath = path.join(__dirname, 'preload.cjs');
 
 let bridgePort = serverConfig.port;
+const pendingStreamLaunches = new Map<string, StreamLaunchPayload>();
+const streamLaunchIdsByWebContents = new Map<number, string>();
 
 interface StreamLaunchCookie {
   name: string;
@@ -25,12 +28,9 @@ interface StreamLaunchCookie {
 
 interface StreamLaunchPayload {
   streamingUrl: string;
+  streamClientConfig?: unknown;
   localStorage?: Record<string, unknown>;
   cookies?: StreamLaunchCookie[];
-}
-
-function encodeStreamState(localStorageState: Record<string, unknown>): string {
-  return Buffer.from(JSON.stringify({ localStorage: localStorageState }), 'utf8').toString('base64url');
 }
 
 function mapSameSite(value: string | undefined): 'unspecified' | 'no_restriction' | 'lax' | 'strict' {
@@ -60,42 +60,57 @@ async function installStreamCookies(cookies: StreamLaunchCookie[] = []) {
   })));
 }
 
-function createStreamWindow(launch: StreamLaunchPayload) {
-  const streamWindow = new BrowserWindow({
-    width: 1440,
-    height: 960,
-    minWidth: 960,
-    minHeight: 540,
-    title: 'OpenStroid Stream',
-    autoHideMenuBar: true,
-    backgroundColor: '#000000',
-    webPreferences: {
-      preload: preloadPath,
-      contextIsolation: true,
-      sandbox: true,
-      additionalArguments: [
-        `--openstroid-stream-state=${encodeStreamState(launch.localStorage ?? {})}`,
-      ],
-    },
+function attachWindowLogging(window: BrowserWindow, label: string) {
+  window.webContents.on('console-message', (_event, level, message, line, sourceId) => {
+    const source = sourceId ? ` ${sourceId}:${line}` : '';
+    console.log(`[${label}:console:${level}]${source} ${message}`);
   });
 
-  streamWindow.webContents.setWindowOpenHandler(({ url }) => {
-    void shell.openExternal(url);
-    return { action: 'deny' };
+  window.webContents.on('did-finish-load', () => {
+    console.log(`[${label}] loaded ${window.webContents.getURL()}`);
   });
 
-  void streamWindow.loadURL(launch.streamingUrl);
+  window.webContents.on('did-fail-load', (_event, errorCode, errorDescription, validatedURL) => {
+    console.error(`[${label}] load failed ${errorCode} ${errorDescription} ${validatedURL}`);
+  });
+
+  window.webContents.on('render-process-gone', (_event, details) => {
+    console.error(`[${label}] render process gone`, details);
+  });
+
+  window.webContents.on('preload-error', (_event, preloadPathValue, error) => {
+    console.error(`[${label}] preload failed ${preloadPathValue}`, error);
+  });
+}
+
+function rendererUrlForPath(routePath: string): string {
+  const normalizedPath = routePath.startsWith('/') ? routePath : `/${routePath}`;
+  return app.isPackaged
+    ? `http://127.0.0.1:${bridgePort}${normalizedPath}`
+    : `${DEV_RENDERER_URL}${normalizedPath}`;
 }
 
 function registerIpcHandlers() {
-  ipcMain.handle('openstroid:open-stream', async (_event, launch: StreamLaunchPayload) => {
+  ipcMain.handle('openstroid:open-stream', async (event, launch: StreamLaunchPayload) => {
     if (!launch?.streamingUrl) {
       throw new Error('Missing stream launch URL.');
     }
 
     await installStreamCookies(launch.cookies);
-    createStreamWindow(launch);
+    console.log(`[main] open stream requested session=${launch.streamClientConfig && typeof launch.streamClientConfig === 'object' && 'sessionId' in launch.streamClientConfig ? String(launch.streamClientConfig.sessionId) : 'unknown'}`);
+    const streamLaunchId = randomUUID();
+    pendingStreamLaunches.set(streamLaunchId, launch);
+    streamLaunchIdsByWebContents.set(event.sender.id, streamLaunchId);
+    console.log(`[main] navigating current window to stream launchId=${streamLaunchId} webContents=${event.sender.id}`);
+    await event.sender.loadURL(rendererUrlForPath('/stream'));
     return { ok: true };
+  });
+
+  ipcMain.handle('openstroid:get-stream-launch', (event) => {
+    const streamLaunchId = streamLaunchIdsByWebContents.get(event.sender.id);
+    const launch = streamLaunchId ? (pendingStreamLaunches.get(streamLaunchId) ?? null) : null;
+    console.log(`[main] stream launch lookup webContents=${event.sender.id} launchId=${streamLaunchId ?? 'none'} found=${Boolean(launch)}`);
+    return launch;
   });
 }
 
@@ -111,16 +126,18 @@ function createMainWindow() {
     webPreferences: {
       preload: preloadPath,
       contextIsolation: true,
-      sandbox: true,
+      sandbox: false,
+      webSecurity: false,
     },
   });
+  attachWindowLogging(window, 'main');
 
   window.webContents.setWindowOpenHandler(({ url }) => {
     void shell.openExternal(url);
     return { action: 'deny' };
   });
 
-  if (serverConfig.isProduction) {
+  if (app.isPackaged) {
     void window.loadURL(`http://127.0.0.1:${bridgePort}`);
   } else {
     void window.loadURL(DEV_RENDERER_URL);

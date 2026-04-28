@@ -156,9 +156,22 @@ export interface StreamLaunchResponse {
   sessionId: string;
   streamingUrl: string;
   gateways: unknown[];
+  streamClientConfig: StreamClientConfig;
   localStorage: Record<string, unknown>;
   cookies: StreamLaunchCookie[];
   startPayload: Record<string, unknown>;
+  sessionDetails?: Record<string, unknown> | null;
+}
+
+export interface StreamClientConfig {
+  homeUrl: string;
+  sessionId: string;
+  sessionQuery?: string;
+  sessionQueries: string[];
+  gateways: unknown[];
+  accessToken: string;
+  authDataToken: string;
+  preferredCodec?: 'auto' | 'av1' | 'h264';
 }
 
 export interface ApiError {

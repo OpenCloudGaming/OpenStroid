@@ -45,6 +45,9 @@ export const serverConfig = {
   authCaptureArtifactDir:
     process.env.AUTH_CAPTURE_ARTIFACT_DIR ??
     path.resolve(projectRoot, '.runtime', 'auth-captures'),
+  cookieAuthStorePath:
+    process.env.COOKIE_AUTH_STORE_PATH ??
+    path.resolve(projectRoot, '.runtime', 'cookie-auth-sessions.json'),
   browserUserDataDir:
     process.env.BROWSER_USER_DATA_DIR ??
     path.resolve(projectRoot, '.runtime', 'browser-profile'),

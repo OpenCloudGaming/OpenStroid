@@ -9,6 +9,7 @@ import { RequireAuth } from './components/RequireAuth';
 import { AuthenticatedLayout } from './layouts/AuthenticatedLayout';
 import { LoginPage } from './pages/LoginPage';
 import { LibraryPage } from './pages/LibraryPage';
+import { StreamPage } from './pages/StreamPage';
 
 export default function App() {
   return (
@@ -18,6 +19,7 @@ export default function App() {
         <AuthProvider>
           <Routes>
             <Route path="/login" element={<LoginPage />} />
+            <Route path="/stream" element={<StreamPage />} />
             <Route
               element={
                 <RequireAuth>

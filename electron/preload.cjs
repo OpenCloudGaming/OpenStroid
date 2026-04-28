@@ -1,28 +1,21 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
-function parseStreamState() {
-  const prefix = '--openstroid-stream-state=';
-  const arg = process.argv.find((value) => value.startsWith(prefix));
-  if (!arg) return {};
-
-  try {
-    const decoded = Buffer.from(arg.slice(prefix.length), 'base64url').toString('utf8');
-    const parsed = JSON.parse(decoded);
-    return parsed.localStorage || {};
-  } catch {
-    return {};
-  }
-}
-
-function installStreamState() {
-  const state = parseStreamState();
+function installLocalStorageState(state = {}) {
+  if (!state || typeof state !== 'object') return;
   for (const [key, value] of Object.entries(state)) {
     window.localStorage.setItem(key, typeof value === 'string' ? value : JSON.stringify(value));
   }
 }
 
-installStreamState();
+console.log('[OpenStroid preload] loaded');
 
 contextBridge.exposeInMainWorld('openStroid', {
   openStream: (launch) => ipcRenderer.invoke('openstroid:open-stream', launch),
+  getStreamLaunch: async () => {
+    console.log('[OpenStroid preload] requesting stream launch');
+    const launch = await ipcRenderer.invoke('openstroid:get-stream-launch');
+    console.log('[OpenStroid preload] stream launch response', Boolean(launch), launch?.sessionId);
+    installLocalStorageState(launch?.localStorage);
+    return launch;
+  },
 });

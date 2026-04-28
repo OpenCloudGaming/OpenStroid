@@ -1,8 +1,10 @@
 import axios, { AxiosError } from 'axios';
+import fs from 'node:fs';
 import { randomUUID } from 'node:crypto';
+import path from 'node:path';
 import { serverConfig } from '../config.js';
 import { createSession, type BridgeSession } from './session.js';
-import { sha256 } from './crypto.js';
+import { decrypt, encrypt, sha256 } from './crypto.js';
 
 const upstreamClient = axios.create({
   baseURL: serverConfig.upstreamBaseUrl,
@@ -33,15 +35,78 @@ export interface CookieAuthCookie {
 interface CookieAuthSession {
   cookieHeader: string;
   cookies: CookieAuthCookie[];
+  createdAt: number;
+  updatedAt: number;
+}
+
+interface PersistedCookieAuthStore {
+  version: 1;
+  sessions: Record<string, CookieAuthSession>;
 }
 
 const refreshRequests = new Map<string, Promise<UpstreamTokens>>();
 const COOKIE_AUTH_PREFIX = 'cookie-auth:';
 const cookieAuthSessions = new Map<string, CookieAuthSession>();
 
+function isFreshCookieSession(session: CookieAuthSession): boolean {
+  const authCookies = session.cookies.filter((cookie) => (
+    cookie.name === 'access_token' ||
+    cookie.name === 'refresh_token' ||
+    cookie.name === 'boosteroid_auth'
+  ));
+  if (authCookies.length === 0) return Boolean(session.cookieHeader);
+  return authCookies.some((cookie) => cookie.expires <= 0 || cookie.expires * 1000 > Date.now() + 60_000);
+}
+
+function loadPersistedCookieAuthSessions(): void {
+  const raw = fs.existsSync(serverConfig.cookieAuthStorePath)
+    ? fs.readFileSync(serverConfig.cookieAuthStorePath, 'utf8')
+    : '';
+  if (!raw) return;
+
+  const store = decrypt<PersistedCookieAuthStore>(raw);
+  if (!store?.sessions) return;
+
+  for (const [id, session] of Object.entries(store.sessions)) {
+    if (session?.cookieHeader && isFreshCookieSession(session)) {
+      cookieAuthSessions.set(id, session);
+    }
+  }
+}
+
+function persistCookieAuthSessions(): void {
+  const sessions = Object.fromEntries(
+    [...cookieAuthSessions.entries()].filter(([, session]) => isFreshCookieSession(session)),
+  );
+
+  fs.mkdirSync(path.dirname(serverConfig.cookieAuthStorePath), { recursive: true });
+  fs.writeFileSync(serverConfig.cookieAuthStorePath, encrypt({ version: 1, sessions }), 'utf8');
+}
+
+loadPersistedCookieAuthSessions();
+
+export function restoreCookieAuthToken(value: string, cookieHeader: string, cookies: CookieAuthCookie[] = []): boolean {
+  if (!value.startsWith(COOKIE_AUTH_PREFIX) || !cookieHeader) {
+    return false;
+  }
+
+  const id = value.slice(COOKIE_AUTH_PREFIX.length);
+  const now = Date.now();
+  cookieAuthSessions.set(id, {
+    cookieHeader,
+    cookies,
+    createdAt: cookieAuthSessions.get(id)?.createdAt ?? now,
+    updatedAt: now,
+  });
+  persistCookieAuthSessions();
+  return true;
+}
+
 export function createCookieAuthToken(cookieHeader: string, cookies: CookieAuthCookie[] = []): string {
   const id = randomUUID();
-  cookieAuthSessions.set(id, { cookieHeader, cookies });
+  const now = Date.now();
+  cookieAuthSessions.set(id, { cookieHeader, cookies, createdAt: now, updatedAt: now });
+  persistCookieAuthSessions();
   return `${COOKIE_AUTH_PREFIX}${id}`;
 }
 
@@ -218,6 +283,15 @@ export async function getStreamingGatewaysUpstream(accessToken: string): Promise
     return (data as { data: unknown[] }).data;
   }
   return [];
+}
+
+export async function getStreamingSessionDetailsUpstream(accessToken: string, sessionId: string): Promise<Record<string, unknown>> {
+  const data = await upstreamPost<unknown>(
+    accessToken,
+    `/api/v1/streaming/session/details?sessionId=${encodeURIComponent(sessionId)}`,
+    null,
+  );
+  return unwrapRecord(data);
 }
 
 export async function enqueueStreamingSessionUpstream(accessToken: string, appId: number): Promise<Record<string, unknown>> {

@@ -19,6 +19,7 @@ import {
   getLastSessionLiveUpstream,
   getLastSessionUpstream,
   getStreamingGatewaysUpstream,
+  getStreamingSessionDetailsUpstream,
   getUpstreamUser,
   isCookieAuthToken,
   logoutUpstream,
@@ -35,9 +36,19 @@ interface StreamLaunchResult {
   sessionId: string;
   streamingUrl: string;
   gateways: unknown[];
+  streamClientConfig: {
+    homeUrl: string;
+    sessionId: string;
+    sessionQueries: string[];
+    gateways: unknown[];
+    accessToken: string;
+    authDataToken: string;
+    preferredCodec: 'auto';
+  };
   localStorage: Record<string, unknown>;
   cookies: ReturnType<typeof getCookieAuthCookies>;
   startPayload: Record<string, unknown>;
+  sessionDetails?: Record<string, unknown> | null;
   launchDiagnostics?: Record<string, unknown>;
 }
 
@@ -52,6 +63,12 @@ interface SessionSignals {
   sessionQueries: string[];
   queuedSessionIds: string[];
   payloads: Array<{ source: string; payload: Record<string, unknown> }>;
+}
+
+interface RealtimeQueueListener {
+  ready: Promise<void>;
+  payloads(): Array<{ source: string; payload: Record<string, unknown> }>;
+  close(): void;
 }
 
 export function createBridgeApp() {
@@ -322,9 +339,129 @@ export function createBridgeApp() {
     return new Promise((resolve) => setTimeout(resolve, ms));
   }
 
-  async function discoverSessionSignals(accessToken: string, appId: number, seedPayload: Record<string, unknown>): Promise<SessionSignals> {
+  function getSessionUserId(session: BridgeSession): string | null {
+    const id = session.user?.id;
+    return id === undefined || id === null ? null : String(id);
+  }
+
+  function getRealtimeAccessToken(accessToken: string): string {
+    return getCookieAuthCookies(accessToken).find((cookie) => cookie.name === 'access_token')?.value ?? accessToken;
+  }
+
+  function getStreamClientAuth(accessToken: string): { accessToken: string; authDataToken: string } {
+    const cookies = getCookieAuthCookies(accessToken);
+    const accessCookie = cookies.find((cookie) => cookie.name === 'access_token')?.value ?? accessToken;
+    const authDataToken = cookies.find((cookie) => cookie.name === 'boosteroid_auth')?.value ?? '';
+    return {
+      accessToken: normalizeAuthorizationForClient(accessCookie),
+      authDataToken,
+    };
+  }
+
+  function normalizeAuthorizationForClient(accessToken: string): string {
+    const plusAsSpace = accessToken.replace(/\+/g, ' ');
+    let decoded = plusAsSpace;
+    try {
+      decoded = decodeURIComponent(plusAsSpace);
+    } catch {
+      decoded = plusAsSpace;
+    }
+
+    const trimmed = decoded.trim();
+    if (/^Bearer\s+/i.test(trimmed)) {
+      return trimmed.replace(/^Bearer\s+/i, 'Bearer ');
+    }
+    if (/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(trimmed)) {
+      return `Bearer ${trimmed}`;
+    }
+    return trimmed;
+  }
+
+  function createRealtimeQueueListener(session: BridgeSession): RealtimeQueueListener | null {
+    const WebSocketClient = globalThis.WebSocket as (new (url: string) => {
+      readyState: number;
+      send(data: string): void;
+      close(code?: number, reason?: string): void;
+      addEventListener(type: 'open' | 'message' | 'close' | 'error', listener: (event: unknown) => void): void;
+    }) | undefined;
+
+    const userId = getSessionUserId(session);
+    const token = getRealtimeAccessToken(session.accessToken);
+    if (!WebSocketClient || !userId || !token) {
+      return null;
+    }
+
+    const url = new URL('/ws', serverConfig.upstreamBaseUrl);
+    url.protocol = 'wss:';
+    url.searchParams.set('uid', userId);
+    url.searchParams.set('token', token);
+
+    const socket = new WebSocketClient(url.toString());
+    const messages: Record<string, unknown>[] = [];
+    let pingTimer: NodeJS.Timeout | null = null;
+    let settled = false;
+    let resolveReady: () => void = () => undefined;
+    const ready = new Promise<void>((resolve) => {
+      resolveReady = resolve;
+    });
+    const settleReady = () => {
+      if (settled) return;
+      settled = true;
+      resolveReady();
+    };
+
+    socket.addEventListener('open', () => {
+      settleReady();
+      pingTimer = setInterval(() => {
+        try {
+          socket.send(JSON.stringify({ type: 'ping' }));
+        } catch {
+          // The REST poller remains active if realtime pings fail.
+        }
+      }, 5000);
+    });
+
+    socket.addEventListener('message', (event: unknown) => {
+      const data = (event as { data?: unknown }).data;
+      try {
+        const parsed = JSON.parse(String(data)) as unknown;
+        if (parsed && typeof parsed === 'object') {
+          messages.push(parsed as Record<string, unknown>);
+        }
+      } catch {
+        // Ignore non-JSON realtime frames.
+      }
+    });
+
+    socket.addEventListener('close', settleReady);
+    socket.addEventListener('error', settleReady);
+
+    return {
+      ready,
+      payloads: () => messages.map((payload, index) => ({
+        source: `websocket:${index}`,
+        payload,
+      })),
+      close: () => {
+        if (pingTimer) clearInterval(pingTimer);
+        try {
+          socket.close(1000, 'launch-complete');
+        } catch {
+          // Socket may already be closed.
+        }
+      },
+    };
+  }
+
+  async function discoverSessionSignals(
+    accessToken: string,
+    appId: number,
+    seedPayload: Record<string, unknown>,
+    realtimePayloads: Array<{ source: string; payload: Record<string, unknown> }> = [],
+  ): Promise<SessionSignals> {
     const payloads = [
       { source: 'enqueue', payload: seedPayload },
+      ...realtimePayloads,
       await optionalPayload('last-session/live', () => getLastSessionLiveUpstream(accessToken)),
       await optionalPayload('last-session', () => getLastSessionUpstream(accessToken)),
       await optionalPayload('active-sessions', () => getActiveSessionsUpstream(accessToken)),
@@ -333,14 +470,19 @@ export function createBridgeApp() {
     return collectSessionSignals(appId, payloads);
   }
 
-  async function waitForStartableSession(accessToken: string, appId: number, enqueuePayload: Record<string, unknown>): Promise<SessionSignals> {
+  async function waitForStartableSession(
+    accessToken: string,
+    appId: number,
+    enqueuePayload: Record<string, unknown>,
+    realtimePayloads: () => Array<{ source: string; payload: Record<string, unknown> }> = () => [],
+  ): Promise<SessionSignals> {
     const deadline = Date.now() + 180_000;
     let bestSignals = collectSessionSignals(appId, [{ source: 'enqueue', payload: enqueuePayload }]);
 
     await delay(5_000);
 
     while (Date.now() < deadline) {
-      const signals = await discoverSessionSignals(accessToken, appId, enqueuePayload);
+      const signals = await discoverSessionSignals(accessToken, appId, enqueuePayload, realtimePayloads());
       if (signals.sessionTokens.length > 0 || signals.sessionQueries.some((query) => getSessionIdFromQuery(query))) {
         return signals;
       }
@@ -351,6 +493,25 @@ export function createBridgeApp() {
     }
 
     return bestSignals;
+  }
+
+  async function waitForStreamingSessionDetails(accessToken: string, sessionId: string): Promise<Record<string, unknown> | null> {
+    const deadline = Date.now() + 60_000;
+    let latest: Record<string, unknown> | null = null;
+
+    while (Date.now() < deadline) {
+      try {
+        latest = await getStreamingSessionDetailsUpstream(accessToken, sessionId);
+        if (findNestedString(latest, ['queryString', 'query', 'sessionQuery'])) {
+          return latest;
+        }
+      } catch {
+        // Details can lag behind the VM-ready signal briefly.
+      }
+      await delay(2_000);
+    }
+
+    return latest;
   }
 
   function createStreamingUrl(sessionId: string, startUrl?: string | null): string {
@@ -370,6 +531,15 @@ export function createBridgeApp() {
     return url.toString();
   }
 
+  function streamingUrlToQuery(streamingUrl: string): string | null {
+    try {
+      const parsed = new URL(streamingUrl, serverConfig.upstreamBaseUrl);
+      return parsed.search || null;
+    } catch {
+      return null;
+    }
+  }
+
   function hasFallbackStartCode(error: unknown): boolean {
     return extractErrorCode(error) === 340006;
   }
@@ -383,10 +553,17 @@ export function createBridgeApp() {
 
     let launchDiagnostics: Record<string, unknown> | undefined;
     let useV1Fallback = false;
+    const realtimeListener = createRealtimeQueueListener(session);
 
     try {
+      await Promise.race([realtimeListener?.ready ?? Promise.resolve(), delay(3000)]);
       const enqueuePayload = await enqueueStreamingSessionUpstream(accessToken, appId);
-      const signals = await waitForStartableSession(accessToken, appId, enqueuePayload);
+      const signals = await waitForStartableSession(
+        accessToken,
+        appId,
+        enqueuePayload,
+        () => realtimeListener?.payloads() ?? [],
+      );
       launchDiagnostics = {
         signalSources: signals.payloads.map((payload) => payload.source),
         queuedSessionIds: signals.queuedSessionIds,
@@ -403,7 +580,12 @@ export function createBridgeApp() {
           if (errorCode === 340005) {
             await dequeueStreamingSessionUpstream(accessToken).catch(() => ({}));
             const nextEnqueuePayload = await enqueueStreamingSessionUpstream(accessToken, appId);
-            const nextSignals = await waitForStartableSession(accessToken, appId, nextEnqueuePayload);
+            const nextSignals = await waitForStartableSession(
+              accessToken,
+              appId,
+              nextEnqueuePayload,
+              () => realtimeListener?.payloads() ?? [],
+            );
             for (const nextToken of nextSignals.sessionTokens) {
               startPayload = await startStreamingSessionV2Upstream(accessToken, appId, nextToken);
               break;
@@ -430,6 +612,8 @@ export function createBridgeApp() {
         throw error;
       }
       useV1Fallback = true;
+    } finally {
+      realtimeListener?.close();
     }
 
     if (!startPayload && useV1Fallback) {
@@ -460,12 +644,49 @@ export function createBridgeApp() {
       gateways = await getStreamingGatewaysUpstream(accessToken).catch(() => []);
     }
 
+    const sessionDetails = await waitForStreamingSessionDetails(accessToken, sessionId);
+    const detailsQuery = findNestedString(sessionDetails, ['queryString', 'query', 'sessionQuery']);
+    const startQuery = findNestedString(startPayload, ['queryString', 'query', 'sessionQuery']);
+    const detailsGateways = findNestedGateways(sessionDetails, ['gateways', 'gateway', 'gw']);
+    const sessionQueries = uniq([
+      ...(detailsQuery ? [detailsQuery] : []),
+      ...(startQuery ? [startQuery] : []),
+      ...extractSessionQueries(startPayload),
+      ...[startUrl, streamingUrlToQuery(createStreamingUrl(sessionId, startUrl))].filter((value): value is string => Boolean(value)),
+      `?sessionId=${sessionId}`,
+    ]);
+    if (detailsGateways.length > 0) {
+      gateways = detailsGateways;
+    }
+
+    const streamAuth = getStreamClientAuth(accessToken);
+
+    if (!sessionQueries.some((query) => query !== `?sessionId=${sessionId}`)) {
+      const error = new Error('Boosteroid did not return a gateway stream query for the launched machine.');
+      (error as Error & { status?: number; details?: unknown }).status = 502;
+      (error as Error & { details?: unknown }).details = {
+        sessionId,
+        sessionDetails,
+        startPayload,
+      };
+      throw error;
+    }
+
     return {
       appId,
       app: appDetails,
       sessionId,
       streamingUrl: createStreamingUrl(sessionId, startUrl),
       gateways,
+      streamClientConfig: {
+        homeUrl: serverConfig.upstreamBaseUrl,
+        sessionId,
+        sessionQueries,
+        gateways,
+        accessToken: streamAuth.accessToken,
+        authDataToken: streamAuth.authDataToken,
+        preferredCodec: 'auto',
+      },
       localStorage: {
         appId: String(appId),
         gateway_pings: gateways,
@@ -473,6 +694,7 @@ export function createBridgeApp() {
       },
       cookies: getCookieAuthCookies(accessToken),
       startPayload,
+      sessionDetails,
       launchDiagnostics,
     };
   }

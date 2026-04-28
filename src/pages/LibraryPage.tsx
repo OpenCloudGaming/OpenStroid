@@ -34,6 +34,7 @@ export function LibraryPage() {
   const [loadState, setLoadState] = useState<LoadState>('loading');
   const [errorMsg, setErrorMsg] = useState<string>('');
   const [launchingGameId, setLaunchingGameId] = useState<number | null>(null);
+  const [launchingGameName, setLaunchingGameName] = useState<string>('');
   const [launchError, setLaunchError] = useState<string>('');
 
   const fetchGames = useCallback(async () => {
@@ -54,13 +55,15 @@ export function LibraryPage() {
 
   const handleLaunch = useCallback(async (game: InstalledGame) => {
     setLaunchingGameId(game.id);
+    setLaunchingGameName(game.name);
     setLaunchError('');
     try {
       const launch = await launchStream(game.id);
+      window.sessionStorage.setItem('openstroid:lastLaunch', JSON.stringify(launch));
       if (window.openStroid?.openStream) {
         await window.openStroid.openStream(launch);
       } else {
-        window.open(launch.streamingUrl, '_blank', 'noopener,noreferrer');
+        window.location.assign('/stream');
       }
     } catch (err: unknown) {
       const msg =
@@ -69,6 +72,7 @@ export function LibraryPage() {
       setLaunchError(msg);
     } finally {
       setLaunchingGameId(null);
+      setLaunchingGameName('');
     }
   }, []);
 
@@ -122,6 +126,18 @@ export function LibraryPage() {
           onClose={() => setLaunchError('')}
         >
           {launchError}
+        </Alert>
+      )}
+
+      {launchingGameId !== null && (
+        <Alert
+          color="brand"
+          variant="light"
+          radius="lg"
+          mb="lg"
+          title={`Starting ${launchingGameName}`}
+        >
+          Requesting a Boosteroid virtual machine. This can take a few minutes when the queue is active.
         </Alert>
       )}
 

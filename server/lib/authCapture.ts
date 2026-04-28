@@ -4,7 +4,7 @@ import { randomUUID } from 'node:crypto';
 import { chromium, type Browser, type BrowserContext, type Cookie, type Page } from 'playwright';
 import { serverConfig } from '../config.js';
 import { createSession, type BridgeSession } from './session.js';
-import { createCookieAuthToken, getUpstreamUser, unwrapRecord } from './upstream.js';
+import { createCookieAuthToken, getUpstreamUser, restoreCookieAuthToken, unwrapRecord } from './upstream.js';
 
 const LOGIN_URL = 'https://boosteroid.com';
 const AUTH_COOKIE_NAMES = ['access_token', 'refresh_token', 'boosteroid_auth', 'qr_auth_code'] as const;
@@ -356,6 +356,12 @@ function createCookieHeader(cookies: StoredCookie[]): string {
     .filter((cookie) => cookie.name && typeof cookie.value === 'string')
     .map((cookie) => `${cookie.name}=${cookie.value}`)
     .join('; ');
+}
+
+function restoreArtifactCookieAuthSession(artifact: CaptureArtifact): void {
+  const accessToken = artifact.bridgeSession?.accessToken;
+  if (!accessToken || artifact.allCookies.length === 0) return;
+  restoreCookieAuthToken(accessToken, createCookieHeader(artifact.allCookies), artifact.allCookies);
 }
 
 function createCookieSessionUser(observedUser: Record<string, unknown> | null, storageUser: Record<string, unknown> | null): Record<string, unknown> {
@@ -773,6 +779,7 @@ class AuthCaptureManager {
     if (!raw) return;
     this.latestArtifact = JSON.parse(raw) as CaptureArtifact;
     this.latestArtifactPath = latest.filePath;
+    restoreArtifactCookieAuthSession(this.latestArtifact);
   }
 
   private cleanupFinishedActive(): void {
