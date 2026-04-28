@@ -4,7 +4,7 @@ import { randomUUID } from 'node:crypto';
 import { chromium, type Browser, type BrowserContext, type Cookie, type Page } from 'playwright';
 import { serverConfig } from '../config.js';
 import { createSession, type BridgeSession } from './session.js';
-import { getUpstreamUser, unwrapRecord } from './upstream.js';
+import { createCookieAuthToken, getUpstreamUser, unwrapRecord } from './upstream.js';
 
 const LOGIN_URL = 'https://boosteroid.com';
 const AUTH_COOKIE_NAMES = ['access_token', 'refresh_token', 'boosteroid_auth', 'qr_auth_code'] as const;
@@ -300,6 +300,70 @@ function extractTokensFromEvents(events: CaptureEvent[]): { accessToken: string 
   }
 
   return { accessToken: null, refreshToken: null };
+}
+
+function isUserEndpoint(url: string): boolean {
+  try {
+    return new URL(url, serverConfig.upstreamBaseUrl).pathname === '/api/v1/user';
+  } catch {
+    return url === '/api/v1/user' || url.endsWith('/api/v1/user');
+  }
+}
+
+function extractUserFromEvents(events: CaptureEvent[]): Record<string, unknown> | null {
+  for (const event of events.slice().reverse()) {
+    if (event.type !== 'response' || event.status !== 200 || !event.payload || !event.url || !isUserEndpoint(event.url)) {
+      continue;
+    }
+
+    const user = unwrapRecord(event.payload);
+    if (typeof user.id !== 'undefined' || typeof user.email === 'string') {
+      return user;
+    }
+  }
+
+  return null;
+}
+
+function extractUserFromStorage(storageItems: ExtensionStorageItem[]): Record<string, unknown> | null {
+  for (const item of storageItems) {
+    if (!/user|auth|session/i.test(item.key)) continue;
+
+    try {
+      const parsed = JSON.parse(item.value) as unknown;
+      const candidate = unwrapRecord(parsed);
+      if (typeof candidate.id !== 'undefined' || typeof candidate.email === 'string') {
+        return candidate;
+      }
+
+      for (const value of Object.values(candidate)) {
+        if (!value || typeof value !== 'object') continue;
+        const nested = unwrapRecord(value);
+        if (typeof nested.id !== 'undefined' || typeof nested.email === 'string') {
+          return nested;
+        }
+      }
+    } catch {
+      // Not JSON user state.
+    }
+  }
+
+  return null;
+}
+
+function createCookieHeader(cookies: StoredCookie[]): string {
+  return cookies
+    .filter((cookie) => cookie.name && typeof cookie.value === 'string')
+    .map((cookie) => `${cookie.name}=${cookie.value}`)
+    .join('; ');
+}
+
+function createCookieSessionUser(observedUser: Record<string, unknown> | null, storageUser: Record<string, unknown> | null): Record<string, unknown> {
+  return observedUser ?? storageUser ?? {
+    id: 0,
+    email: 'boosteroid-cookie-session',
+    name: 'Boosteroid cookie session',
+  };
 }
 
 function looksLikeJwt(value: string): boolean {
@@ -615,6 +679,31 @@ class AuthCaptureManager {
           : cookieTokens.accessToken || cookieTokens.refreshToken
             ? 'cookie'
             : 'none';
+    const observedUser = extractUserFromEvents(observedResponses);
+    const storageUser = extractUserFromStorage(storageItems);
+    const cookieHeader = createCookieHeader(allCookies);
+
+    if (cookieTokens.accessToken && cookieTokens.refreshToken && cookieHeader) {
+      const sessionUser = createCookieSessionUser(observedUser, storageUser);
+      const cookieAuthToken = createCookieAuthToken(cookieHeader);
+      capture.bridgeSession = createSession({
+        accessToken: cookieAuthToken,
+        refreshToken: refreshToken ?? cookieAuthToken,
+        userData: payloadTokens.userData,
+        user: sessionUser,
+      });
+
+      const artifact = this.buildSubmittedArtifact(capture, submission, allCookies, observedResponses);
+      artifact.diagnostics = createDiagnostics(observedResponses, allCookies, storageItems, 'cookie', accessToken, refreshToken, {
+        status: observedUser ? 200 : undefined,
+        message: observedUser
+          ? 'Accepted captured Boosteroid cookies with observed /api/v1/user response.'
+          : 'Accepted captured Boosteroid auth cookies without blocking on server-side token validation.',
+      });
+
+      await this.finalize(capture, 'succeeded', 'Successfully captured authenticated Boosteroid session via Chrome extension cookies.', artifact);
+      return capture.artifact as CaptureArtifact;
+    }
 
     if (!accessToken || !refreshToken) {
       const artifact = this.buildSubmittedArtifact(capture, submission, allCookies, observedResponses);

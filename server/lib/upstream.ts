@@ -19,6 +19,40 @@ export interface UpstreamTokens {
 }
 
 const refreshRequests = new Map<string, Promise<UpstreamTokens>>();
+const COOKIE_AUTH_PREFIX = 'cookie-auth:';
+
+export function createCookieAuthToken(cookieHeader: string): string {
+  return `${COOKIE_AUTH_PREFIX}${Buffer.from(cookieHeader, 'utf8').toString('base64url')}`;
+}
+
+export function readCookieAuthToken(value: string): string | null {
+  if (!value.startsWith(COOKIE_AUTH_PREFIX)) {
+    return null;
+  }
+
+  try {
+    return Buffer.from(value.slice(COOKIE_AUTH_PREFIX.length), 'base64url').toString('utf8');
+  } catch {
+    return null;
+  }
+}
+
+export function isCookieAuthToken(value: string): boolean {
+  return Boolean(readCookieAuthToken(value));
+}
+
+function upstreamAuthHeaders(accessToken: string): Record<string, string> {
+  const cookieHeader = readCookieAuthToken(accessToken);
+  if (cookieHeader) {
+    return {
+      Cookie: cookieHeader,
+      Origin: serverConfig.upstreamBaseUrl,
+      Referer: `${serverConfig.upstreamBaseUrl}/`,
+    };
+  }
+
+  return { Authorization: normalizeAuthorizationValue(accessToken) };
+}
 
 function normalizeAuthorizationValue(accessToken: string): string {
   const plusAsSpace = accessToken.replace(/\+/g, ' ');
@@ -97,7 +131,7 @@ export async function loginUpstream(payload: Record<string, string | boolean>): 
 
 export async function getUpstreamUser(accessToken: string): Promise<Record<string, unknown>> {
   const { data } = await upstreamClient.get('/api/v1/user', {
-    headers: { Authorization: normalizeAuthorizationValue(accessToken) },
+    headers: upstreamAuthHeaders(accessToken),
   });
 
   return unwrapRecord(data);
@@ -105,7 +139,7 @@ export async function getUpstreamUser(accessToken: string): Promise<Record<strin
 
 export async function getInstalledGamesUpstream(accessToken: string): Promise<unknown[]> {
   const { data } = await upstreamClient.get('/api/v1/boostore/applications/installed', {
-    headers: { Authorization: normalizeAuthorizationValue(accessToken) },
+    headers: upstreamAuthHeaders(accessToken),
   });
 
   if (Array.isArray(data)) return data;
@@ -124,7 +158,7 @@ export async function logoutUpstream(accessToken: string): Promise<void> {
     '/api/v2/auth/logout',
     {},
     {
-      headers: { Authorization: normalizeAuthorizationValue(accessToken) },
+      headers: upstreamAuthHeaders(accessToken),
     },
   );
 }
@@ -174,7 +208,7 @@ export async function withRefresh<T>(
   } catch (error) {
     const isUnauthorized = error instanceof AxiosError ? error.response?.status === 401 : false;
 
-    if (!isUnauthorized) {
+    if (!isUnauthorized || readCookieAuthToken(session.accessToken)) {
       throw error;
     }
 

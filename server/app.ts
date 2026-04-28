@@ -12,6 +12,7 @@ import { clearSession, createSession, readSession, writeSession } from './lib/se
 import {
   getInstalledGamesUpstream,
   getUpstreamUser,
+  isCookieAuthToken,
   logoutUpstream,
   normalizeError,
   withRefresh,
@@ -224,6 +225,11 @@ export function createBridgeApp() {
       writeSession(res, nextSession);
       sendSession(res, refreshed.result);
     } catch (error) {
+      if (isCookieAuthToken(session.accessToken) && session.user) {
+        sendSession(res, session.user);
+        return;
+      }
+
       clearSession(res);
       next(error);
     }
@@ -266,6 +272,11 @@ export function createBridgeApp() {
       writeSession(res, nextSession);
       res.json({ user: refreshed.result });
     } catch (error) {
+      if (isCookieAuthToken(session.accessToken) && session.user) {
+        res.json({ user: session.user });
+        return;
+      }
+
       clearSession(res);
       next(error);
     }
@@ -280,6 +291,11 @@ export function createBridgeApp() {
       writeSession(res, refreshed.session);
       res.json({ games: refreshed.result });
     } catch (error) {
+      if (isCookieAuthToken(session.accessToken)) {
+        next(error);
+        return;
+      }
+
       clearSession(res);
       next(error);
     }
