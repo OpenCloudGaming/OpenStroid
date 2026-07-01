@@ -12,8 +12,10 @@ export function SettingsModalHost({ open, onClose, children }: SettingsModalHost
 
   useEffect(() => {
     if (!open) {
-      setContentReady(false);
-      return undefined;
+      const frame = window.requestAnimationFrame(() => {
+        setContentReady(false);
+      });
+      return () => window.cancelAnimationFrame(frame);
     }
 
     const frame = window.requestAnimationFrame(() => {

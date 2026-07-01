@@ -774,6 +774,9 @@ class AuthCaptureManager {
     capture.status = status;
     capture.updatedAtMs = Date.now();
     capture.completedAtMs = Date.now();
+    if (status === 'succeeded') {
+      capture.errors = [];
+    }
     if (message) {
       if (status !== 'succeeded') {
         capture.errors.push(message);

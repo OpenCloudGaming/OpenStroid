@@ -70,6 +70,7 @@ export function LoginPage() {
   const [pairingCode, setPairingCode] = useState<string | null>(null);
   const [copyState, setCopyState] = useState<'idle' | 'copied' | 'failed'>('idle');
   const pollHandle = useRef<number | null>(null);
+  const pollStatusRef = useRef<(captureId: string) => Promise<void>>(async () => {});
 
   const from = (location.state as { from?: { pathname: string } })?.from?.pathname || '/my-games';
 
@@ -94,7 +95,7 @@ export function LoginPage() {
 
       if (!TERMINAL_STATUSES.has(next.status)) {
         pollHandle.current = window.setTimeout(() => {
-          void pollStatus(captureId);
+          void pollStatusRef.current(captureId);
         }, POLL_INTERVAL_MS);
       }
     } catch (err) {
@@ -102,6 +103,10 @@ export function LoginPage() {
       setServerError(axiosErr.response?.data?.message || 'Failed to read login status.');
     }
   }, [from, navigate, refreshSession]);
+
+  useEffect(() => {
+    pollStatusRef.current = pollStatus;
+  }, [pollStatus]);
 
   useEffect(() => () => stopPolling(), [stopPolling]);
 
@@ -162,7 +167,7 @@ export function LoginPage() {
       const axiosErr = err as AxiosError<ApiError>;
       setServerError(axiosErr.response?.data?.message || 'No login session is currently available.');
     }
-  }, [capture?.id, pollStatus, stopPolling]);
+  }, [capture, pollStatus, stopPolling]);
 
   const copyPairingCode = useCallback(async () => {
     if (!pairingCode) return;

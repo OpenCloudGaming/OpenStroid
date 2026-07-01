@@ -306,7 +306,10 @@ export function MyGamesPage() {
   }, [fetchDashboard]);
 
   useEffect(() => {
-    void fetchDashboard();
+    const handle = window.setTimeout(() => {
+      void fetchDashboard();
+    }, 0);
+    return () => window.clearTimeout(handle);
   }, [fetchDashboard]);
 
   return (

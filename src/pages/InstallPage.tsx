@@ -155,7 +155,11 @@ export function InstallPage({
   }, [query]);
 
   useEffect(() => {
-    if (collectionReady) void loadGames(debouncedQuery);
+    if (!collectionReady) return undefined;
+    const handle = window.setTimeout(() => {
+      void loadGames(debouncedQuery);
+    }, 0);
+    return () => window.clearTimeout(handle);
   }, [collectionReady, debouncedQuery, loadGames]);
 
   const visibleGames = useMemo(() => {
