@@ -25,10 +25,13 @@ function isActivePath(pathname: string, to: string): boolean {
 export function AuthenticatedLayout() {
   const location = useLocation();
   const [mobileNavOpened, { toggle: toggleMobileNav, close: closeMobileNav }] = useDisclosure(false);
+  const activePathname = typeof window !== 'undefined' && window.location.pathname === '/settings'
+    ? '/settings'
+    : location.pathname;
 
   const renderNavItems = (onClick?: () => void) => navItems.map((item) => {
     const Icon = item.icon;
-    const active = isActivePath(location.pathname, item.to);
+    const active = isActivePath(activePathname, item.to);
 
     return (
       <UnstyledButton

@@ -3,7 +3,7 @@ import '@mantine/notifications/styles.css';
 import './styles.css';
 import { MantineProvider } from '@mantine/core';
 import { Notifications } from '@mantine/notifications';
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import { theme } from './theme';
 import { AuthProvider } from './auth';
 import { RequireAuth } from './components/RequireAuth';
@@ -21,25 +21,48 @@ export default function App() {
       <Notifications position="top-right" />
       <BrowserRouter>
         <AuthProvider>
-          <Routes>
-            <Route path="/login" element={<LoginPage />} />
-            <Route path="/stream" element={<StreamPage />} />
-            <Route
-              element={
-                <RequireAuth>
-                  <AuthenticatedLayout />
-                </RequireAuth>
-              }
-            >
-              <Route path="/my-games" element={<MyGamesPage />} />
-              <Route path="/library" element={<LibraryCatalogPage />} />
-              <Route path="/install" element={<InstallPage />} />
-              <Route path="/settings" element={<SettingsPage />} />
-            </Route>
-            <Route path="*" element={<Navigate to="/my-games" replace />} />
-          </Routes>
+          <AppRoutes />
         </AuthProvider>
       </BrowserRouter>
     </MantineProvider>
+  );
+}
+
+function AppRoutes() {
+  const location = useLocation();
+  const state = location.state as { backgroundPath?: string } | null;
+  const settingsOpen = location.pathname === '/settings';
+  const backgroundPath =
+    settingsOpen && state?.backgroundPath && state.backgroundPath !== '/settings'
+      ? state.backgroundPath
+      : settingsOpen
+        ? '/my-games'
+        : undefined;
+
+  return (
+    <>
+      <Routes location={backgroundPath ?? location}>
+        <Route path="/login" element={<LoginPage />} />
+        <Route path="/stream" element={<StreamPage />} />
+        <Route
+          element={
+            <RequireAuth>
+              <AuthenticatedLayout />
+            </RequireAuth>
+          }
+        >
+          <Route path="/my-games" element={<MyGamesPage />} />
+          <Route path="/library" element={<LibraryCatalogPage />} />
+          <Route path="/install" element={<InstallPage />} />
+        </Route>
+        <Route path="*" element={<Navigate to="/my-games" replace />} />
+      </Routes>
+
+      {settingsOpen && (
+        <RequireAuth>
+          <SettingsPage />
+        </RequireAuth>
+      )}
+    </>
   );
 }
