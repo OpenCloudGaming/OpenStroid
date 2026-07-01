@@ -1,11 +1,12 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 
-const backendUrl = process.env.BACKEND_PROXY_TARGET || 'http://localhost:3001';
+const backendUrl = process.env.BACKEND_PROXY_TARGET || 'http://127.0.0.1:3001';
 
 export default defineConfig({
   plugins: [react()],
   server: {
+    host: '127.0.0.1',
     port: 3000,
     open: false,
     proxy: {
@@ -15,6 +16,11 @@ export default defineConfig({
         secure: false,
       },
       '/library': {
+        target: backendUrl,
+        changeOrigin: true,
+        secure: false,
+      },
+      '/api': {
         target: backendUrl,
         changeOrigin: true,
         secure: false,

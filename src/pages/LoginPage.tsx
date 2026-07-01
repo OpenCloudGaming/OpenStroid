@@ -1,114 +1,191 @@
-import { useState, useCallback } from 'react';
-import { useNavigate, useLocation, Navigate } from 'react-router-dom';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Navigate, useLocation, useNavigate } from 'react-router-dom';
 import {
-  TextInput,
-  PasswordInput,
-  Button,
-  Paper,
-  Title,
-  Text,
-  Stack,
-  Box,
-  Center,
   Alert,
-  Transition,
-  Checkbox,
+  Box,
+  Button,
+  Center,
+  Code,
+  Group,
+  Loader,
+  Paper,
+  Stack,
+  Text,
+  ThemeIcon,
+  Title,
 } from '@mantine/core';
-import { useForm } from '@mantine/form';
-import { IconMail, IconLock, IconAlertCircle } from '@tabler/icons-react';
+import {
+  IconAlertCircle,
+  IconArrowRight,
+  IconBrandChrome,
+  IconCheck,
+  IconCopy,
+  IconPlayerStop,
+  IconPuzzle,
+  IconRefresh,
+} from '@tabler/icons-react';
 import { AxiosError } from 'axios';
-import { Turnstile } from 'react-turnstile';
+import {
+  cancelLoginCapture,
+  getLoginCaptureStatus,
+  startLoginCapture,
+} from '../api';
 import { useAuth } from '../auth';
-import { API_CONFIG } from '../api/config';
-import type { ApiError } from '../types';
-import classes from './LoginPage.module.css';
+import type {
+  ApiError,
+  LoginCaptureSessionStatus,
+  LoginCaptureStatus,
+} from '../types';
+
+const POLL_INTERVAL_MS = 1500;
+const TERMINAL_STATUSES = new Set<LoginCaptureStatus>(['succeeded', 'failed', 'cancelled', 'timed_out']);
+const EXTENSION_PATH = 'extension/openstroid-capture';
+
+function describeStatus(status: LoginCaptureStatus): string {
+  switch (status) {
+    case 'starting':
+      return 'Creating a local extension capture session.';
+    case 'awaiting_user':
+      return 'Pair the extension, sign in on Boosteroid, then keep this page open while OpenStroid waits for the captured session.';
+    case 'succeeded':
+      return 'Session captured. OpenStroid is ready to continue.';
+    case 'failed':
+      return 'Capture failed before a usable session was received.';
+    case 'cancelled':
+      return 'Capture was cancelled.';
+    case 'timed_out':
+      return 'Capture timed out before login completed.';
+    default:
+      return 'Waiting for capture status.';
+  }
+}
 
 export function LoginPage() {
-  const { login, isAuthenticated, isBootstrapping, isLoading } = useAuth();
+  const { refreshSession, isAuthenticated, isBootstrapping } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
+  const [capture, setCapture] = useState<LoginCaptureSessionStatus | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const [serverError, setServerError] = useState<string | null>(null);
-  const [turnstileToken, setTurnstileToken] = useState<string | null>(null);
-  const [turnstileError, setTurnstileError] = useState<string | null>(null);
-  const [turnstileInstanceKey, setTurnstileInstanceKey] = useState(0);
+  const [pairingCode, setPairingCode] = useState<string | null>(null);
+  const [copyState, setCopyState] = useState<'idle' | 'copied' | 'failed'>('idle');
+  const pollHandle = useRef<number | null>(null);
+  const pollStatusRef = useRef<(captureId: string) => Promise<void>>(async () => {});
 
-  const from = (location.state as { from?: { pathname: string } })?.from?.pathname || '/library';
+  const from = (location.state as { from?: { pathname: string } })?.from?.pathname || '/my-games';
 
-  const form = useForm({
-    initialValues: {
-      email: '',
-      password: '',
-      remember_me: false,
-    },
-    validate: {
-      email: (value) => {
-        if (!value.trim()) return 'Email is required';
-        if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)) return 'Enter a valid email address';
-        return null;
-      },
-      password: (value) => {
-        if (!value) return 'Password is required';
-        if (value.length < 8) return 'Password must be at least 8 characters';
-        return null;
-      },
-    },
-    validateInputOnBlur: true,
-  });
-
-  const handleTurnstileVerify = useCallback((token: string) => {
-    setTurnstileToken(token);
-    setTurnstileError(null);
+  const stopPolling = useCallback(() => {
+    if (pollHandle.current !== null) {
+      window.clearTimeout(pollHandle.current);
+      pollHandle.current = null;
+    }
   }, []);
 
-  const handleTurnstileError = useCallback(() => {
-    setTurnstileToken(null);
-    setTurnstileError('Captcha verification failed. Please try again.');
-  }, []);
+  const pollStatus = useCallback(async (captureId: string) => {
+    try {
+      const next = await getLoginCaptureStatus(captureId);
+      setCapture(next);
+      setServerError(null);
 
-  const handleTurnstileExpire = useCallback(() => {
-    setTurnstileToken(null);
-  }, []);
+      if (next.status === 'succeeded' && next.sessionEstablished) {
+        await refreshSession();
+        navigate(from, { replace: true });
+        return;
+      }
 
-  const handleSubmit = useCallback(async (values: { email: string; password: string; remember_me: boolean }) => {
-    if (!turnstileToken) {
-      setServerError('Please complete the captcha verification.');
+      if (!TERMINAL_STATUSES.has(next.status)) {
+        pollHandle.current = window.setTimeout(() => {
+          void pollStatusRef.current(captureId);
+        }, POLL_INTERVAL_MS);
+      }
+    } catch (err) {
+      const axiosErr = err as AxiosError<ApiError>;
+      setServerError(axiosErr.response?.data?.message || 'Failed to read login status.');
+    }
+  }, [from, navigate, refreshSession]);
+
+  useEffect(() => {
+    pollStatusRef.current = pollStatus;
+  }, [pollStatus]);
+
+  useEffect(() => () => stopPolling(), [stopPolling]);
+
+  const startCapture = useCallback(async () => {
+    stopPolling();
+    setIsSubmitting(true);
+    setServerError(null);
+    setCopyState('idle');
+    try {
+      const started = await startLoginCapture('extension');
+      setPairingCode(started.extensionPairingCode ?? null);
+      const initialStatus = await getLoginCaptureStatus(started.id);
+      setCapture(initialStatus);
+      void pollStatus(started.id);
+      window.open(started.loginUrl, '_blank', 'noopener,noreferrer');
+    } catch (err) {
+      const axiosErr = err as AxiosError<ApiError>;
+      const fallback = axiosErr.response?.status === 409
+        ? 'A login capture is already running. Follow that session or cancel it first.'
+        : 'Could not start the extension login session.';
+      setServerError(axiosErr.response?.data?.message || fallback);
+    } finally {
+      setIsSubmitting(false);
+    }
+  }, [pollStatus, stopPolling]);
+
+  const handleCancel = useCallback(async () => {
+    if (!capture) return;
+    stopPolling();
+    setIsSubmitting(true);
+    try {
+      const cancelled = await cancelLoginCapture(capture.id);
+      setCapture(cancelled);
+      setPairingCode(null);
+    } catch (err) {
+      const axiosErr = err as AxiosError<ApiError>;
+      setServerError(axiosErr.response?.data?.message || 'Failed to cancel the active capture.');
+    } finally {
+      setIsSubmitting(false);
+    }
+  }, [capture, stopPolling]);
+
+  const handleRefresh = useCallback(async () => {
+    setServerError(null);
+    if (capture?.id) {
+      stopPolling();
+      await pollStatus(capture.id);
       return;
     }
 
-    setServerError(null);
     try {
-      await login({
-        email: values.email,
-        password: values.password,
-        remember_me: values.remember_me,
-        'cf-turnstile-response': turnstileToken,
-      });
-      navigate(from, { replace: true });
-    } catch (err) {
-      setTurnstileToken(null);
-      setTurnstileInstanceKey((current) => current + 1);
-
-      const axiosErr = err as AxiosError<ApiError>;
-      const status = axiosErr.response?.status;
-      const data = axiosErr.response?.data;
-      if (status === 422 || status === 403) {
-        const raw = data as Record<string, unknown> | undefined;
-        const nested = raw?.error as Record<string, unknown> | undefined;
-        const msg =
-          (raw?.message as string) ||
-          (raw?.error_message as string) ||
-          (nested?.message as string) ||
-          'We could not find those credentials.';
-        setServerError(msg);
-      } else if (data?.message) {
-        setServerError(data.message);
-      } else if (axiosErr.message === 'Network Error') {
-        setServerError('Unable to reach the server. Check your connection.');
-      } else {
-        setServerError('An unexpected error occurred. Please try again.');
+      const latest = await getLoginCaptureStatus();
+      setCapture(latest);
+      if (!TERMINAL_STATUSES.has(latest.status)) {
+        void pollStatus(latest.id);
       }
+    } catch (err) {
+      const axiosErr = err as AxiosError<ApiError>;
+      setServerError(axiosErr.response?.data?.message || 'No login session is currently available.');
     }
-  }, [from, login, navigate, turnstileToken]);
+  }, [capture, pollStatus, stopPolling]);
+
+  const copyPairingCode = useCallback(async () => {
+    if (!pairingCode) return;
+    try {
+      await navigator.clipboard.writeText(pairingCode);
+      setCopyState('copied');
+      window.setTimeout(() => setCopyState('idle'), 1600);
+    } catch {
+      setCopyState('failed');
+    }
+  }, [pairingCode]);
+
+  const statusTone = useMemo(() => {
+    if (!capture) return 'blue';
+    if (capture.status === 'succeeded') return 'teal';
+    if (capture.status === 'failed' || capture.status === 'timed_out' || capture.status === 'cancelled') return 'yellow';
+    return 'blue';
+  }, [capture]);
 
   if (isAuthenticated && !isBootstrapping) {
     return <Navigate to={from} replace />;
@@ -118,212 +195,166 @@ export function LoginPage() {
     <Box
       style={{
         minHeight: '100vh',
-        background:
-          'radial-gradient(ellipse at 20% 50%, rgba(0, 212, 245, 0.08) 0%, transparent 50%), radial-gradient(ellipse at 80% 20%, rgba(102, 0, 245, 0.06) 0%, transparent 50%), var(--mantine-color-dark-8)',
+        background: '#0b0d12',
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
       }}
     >
-      <Box
-        style={{
-          position: 'absolute',
-          top: 0,
-          left: 0,
-          right: 0,
-          bottom: 0,
-          overflow: 'hidden',
-          pointerEvents: 'none',
-        }}
-      >
-        <Box
-          style={{
-            position: 'absolute',
-            top: '-30%',
-            left: '-10%',
-            width: '600px',
-            height: '600px',
-            borderRadius: '50%',
-            background:
-              'radial-gradient(circle, rgba(0, 212, 245, 0.04) 0%, transparent 70%)',
-            filter: 'blur(40px)',
-          }}
-        />
-        <Box
-          style={{
-            position: 'absolute',
-            bottom: '-20%',
-            right: '-5%',
-            width: '500px',
-            height: '500px',
-            borderRadius: '50%',
-            background:
-              'radial-gradient(circle, rgba(102, 0, 245, 0.04) 0%, transparent 70%)',
-            filter: 'blur(40px)',
-          }}
-        />
-      </Box>
-
-      <Center style={{ position: 'relative', zIndex: 1, width: '100%', padding: '24px' }}>
-        <Stack gap="xl" align="center" w="100%" maw={400}>
+      <Center w="100%" p="lg">
+        <Stack gap="lg" w="100%" maw={860}>
           <Stack gap={6} align="center">
-            <Box
-              style={{
-                width: 56,
-                height: 56,
-                borderRadius: 16,
-                background: 'linear-gradient(135deg, #00d4f5 0%, #6600f5 100%)',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                boxShadow: '0 8px 32px rgba(0, 212, 245, 0.2)',
-              }}
-            >
-              <Text fw={900} size="xl" c="white" style={{ lineHeight: 1 }}>
-                OS
-              </Text>
-            </Box>
-            <Title
-              order={1}
-              ta="center"
-              fw={800}
-              style={{ fontSize: '2rem', letterSpacing: '-0.02em' }}
-            >
-              <Text
-                component="span"
-                inherit
-                variant="gradient"
-                gradient={{ from: 'brand.3', to: 'accent.4', deg: 135 }}
-              >
-                OpenStroid
-              </Text>
+            <ThemeIcon size={56} radius={8} color="cyan" variant="filled">
+              <IconPuzzle size={30} />
+            </ThemeIcon>
+            <Title order={1} ta="center" fw={800} size="h2">
+              Sign in with your Boosteroid browser session
             </Title>
-            <Text c="dimmed" size="sm" ta="center">
-              Cloud gaming, open source
+            <Text c="dimmed" size="sm" ta="center" maw={640}>
+              OpenStroid uses the companion Chrome extension in your normal browser profile. It does not launch an automated browser for login.
             </Text>
           </Stack>
 
           <Paper
             w="100%"
             p="xl"
-            radius="lg"
+            radius="md"
             style={{
-              backgroundColor: 'rgba(37, 38, 43, 0.7)',
-              border: '1px solid var(--mantine-color-dark-4)',
-              backdropFilter: 'blur(20px)',
+              backgroundColor: '#10141b',
+              border: '1px solid rgba(255,255,255,0.08)',
             }}
           >
-            <form onSubmit={form.onSubmit(handleSubmit)}>
-              <Stack gap="md">
-                <Title order={3} fw={600} size="lg">
-                  Sign in to your account
-                </Title>
-
-                <Transition
-                  mounted={!!(serverError || turnstileError)}
-                  transition="slide-down"
-                  duration={200}
-                >
-                  {(styles) => (
-                    <Alert
-                      style={styles}
-                      variant="light"
-                      color="red"
-                      icon={<IconAlertCircle size={18} />}
-                      withCloseButton
-                      onClose={() => {
-                        setServerError(null);
-                        setTurnstileError(null);
-                      }}
-                      radius="md"
-                    >
-                      {serverError || turnstileError}
-                    </Alert>
-                  )}
-                </Transition>
-
-                <TextInput
-                  label="Email"
-                  placeholder="you@example.com"
-                  leftSection={<IconMail size={16} />}
-                  size="md"
-                  autoComplete="email"
-                  disabled={isLoading}
-                  classNames={{ input: classes.loginInput }}
-                  {...form.getInputProps('email')}
-                />
-
-                <PasswordInput
-                  label="Password"
-                  placeholder="Enter your password"
-                  leftSection={<IconLock size={16} />}
-                  size="md"
-                  autoComplete="current-password"
-                  disabled={isLoading}
-                  classNames={{ input: classes.loginInput }}
-                  {...form.getInputProps('password')}
-                />
-
-                <Checkbox
-                  label="Remember me"
-                  size="sm"
-                  disabled={isLoading}
-                  styles={{
-                    input: {
-                      backgroundColor: 'rgba(255, 255, 255, 0.06)',
-                      borderColor: 'var(--mantine-color-dark-4)',
-                    },
-                  }}
-                  {...form.getInputProps('remember_me', { type: 'checkbox' })}
-                />
-
-                <Box
-                  style={{
-                    display: 'flex',
-                    justifyContent: 'center',
-                    minHeight: 65,
-                  }}
-                >
-                  <Turnstile
-                    key={turnstileInstanceKey}
-                    sitekey={API_CONFIG.turnstileSiteKey}
-                    onVerify={handleTurnstileVerify}
-                    onError={handleTurnstileError}
-                    onExpire={handleTurnstileExpire}
-                    theme="dark"
-                    size="flexible"
-                    retry="auto"
-                    retryInterval={3000}
-                  />
-                </Box>
-
+            <Stack gap="lg">
+              <Group justify="space-between" align="flex-start">
+                <Stack gap={4} maw={600}>
+                  <Title order={3} fw={700}>Extension login</Title>
+                  <Text size="sm" c="dimmed">
+                    Load <Code>{EXTENSION_PATH}</Code>, set its backend URL to <Code>http://127.0.0.1:3001</Code>, then pair it with the code below.
+                  </Text>
+                </Stack>
                 <Button
-                  type="submit"
-                  fullWidth
                   size="md"
-                  loading={isLoading}
-                  disabled={!turnstileToken}
-                  mt="xs"
-                  variant="gradient"
-                  gradient={{ from: 'brand.5', to: 'accent.6', deg: 135 }}
-                  style={{
-                    fontWeight: 600,
-                    height: 46,
-                    transition: 'all 150ms ease',
-                  }}
+                  color="teal"
+                  leftSection={<IconPuzzle size={16} />}
+                  onClick={() => void startCapture()}
+                  loading={isSubmitting}
                 >
-                  Sign in
+                  Start login
                 </Button>
-              </Stack>
-            </form>
-          </Paper>
+              </Group>
 
-          <Text c="dimmed" size="xs" ta="center">
-            OpenStroid uses a same-origin auth bridge. Browser sessions stay on OpenStroid,
-            while upstream tokens remain inside secure HttpOnly cookies.
-          </Text>
+              <SimpleSteps />
+
+              {serverError && (
+                <Alert icon={<IconAlertCircle size={18} />} color="red" variant="light">
+                  {serverError}
+                </Alert>
+              )}
+
+              {pairingCode && (
+                <Paper p="md" radius="md" bg="rgba(20, 184, 166, 0.08)" style={{ border: '1px solid rgba(20,184,166,0.25)' }}>
+                  <Group justify="space-between" align="center">
+                    <Stack gap={2}>
+                      <Text size="xs" c="dimmed">Pairing code</Text>
+                      <Code fz={28} fw={800}>{pairingCode}</Code>
+                    </Stack>
+                    <Button variant="light" color={copyState === 'failed' ? 'red' : 'teal'} leftSection={<IconCopy size={16} />} onClick={() => void copyPairingCode()}>
+                      {copyState === 'copied' ? 'Copied' : copyState === 'failed' ? 'Copy failed' : 'Copy'}
+                    </Button>
+                  </Group>
+                </Paper>
+              )}
+
+              <Group>
+                <Button
+                  variant="light"
+                  leftSection={<IconBrandChrome size={16} />}
+                  onClick={() => window.open('https://boosteroid.com/', '_blank', 'noopener,noreferrer')}
+                >
+                  Open Boosteroid
+                </Button>
+                <Button
+                  variant="light"
+                  leftSection={<IconRefresh size={16} />}
+                  onClick={() => void handleRefresh()}
+                  disabled={isSubmitting}
+                >
+                  Refresh status
+                </Button>
+              </Group>
+
+              <Alert color={statusTone} variant="light" title={capture ? `Status: ${capture.status}` : 'No login session running'}>
+                <Stack gap={6}>
+                  <Text size="sm">
+                    {capture ? describeStatus(capture.status) : 'Click Start login, paste the pairing code into the extension, then sign in on Boosteroid.'}
+                  </Text>
+                  {capture && (
+                    <>
+                      <Text size="xs" c="dimmed">Capture ID: <Code>{capture.id}</Code></Text>
+                      <Text size="xs" c="dimmed">Timeout: {new Date(capture.timeoutAt).toLocaleString()}</Text>
+                      {capture.errors.length > 0 && (
+                        <Text size="xs" c="yellow.3">{capture.errors[capture.errors.length - 1]}</Text>
+                      )}
+                    </>
+                  )}
+                  {capture && !TERMINAL_STATUSES.has(capture.status) && (
+                    <Group gap="sm">
+                      <Loader size="sm" type="dots" color="teal" />
+                      <Text size="xs" c="dimmed">Checking for the extension capture every {POLL_INTERVAL_MS / 1000}s.</Text>
+                    </Group>
+                  )}
+                  {capture?.status === 'succeeded' && (
+                    <Button
+                      variant="light"
+                      color="teal"
+                      size="xs"
+                      rightSection={<IconArrowRight size={14} />}
+                      onClick={async () => {
+                        await refreshSession();
+                        navigate(from, { replace: true });
+                      }}
+                    >
+                      Continue to library
+                    </Button>
+                  )}
+                  {capture && !TERMINAL_STATUSES.has(capture.status) && (
+                    <Button
+                      size="xs"
+                      variant="subtle"
+                      color="red"
+                      leftSection={<IconPlayerStop size={14} />}
+                      onClick={() => void handleCancel()}
+                    >
+                      Cancel login
+                    </Button>
+                  )}
+                </Stack>
+              </Alert>
+            </Stack>
+          </Paper>
         </Stack>
       </Center>
     </Box>
+  );
+}
+
+function SimpleSteps() {
+  return (
+    <Group gap="md" grow align="stretch">
+      {[
+        ['1', 'Start login'],
+        ['2', 'Paste the code into the extension'],
+        ['3', 'Sign in on Boosteroid'],
+      ].map(([number, label]) => (
+        <Paper key={number} p="md" radius="md" bg="#0b0f15" style={{ border: '1px solid rgba(255,255,255,0.08)' }}>
+          <Group gap="sm" wrap="nowrap">
+            <ThemeIcon color="teal" variant="light" radius={8}>
+              {number === '3' ? <IconCheck size={16} /> : <Text fw={800}>{number}</Text>}
+            </ThemeIcon>
+            <Text size="sm" fw={700}>{label}</Text>
+          </Group>
+        </Paper>
+      ))}
+    </Group>
   );
 }

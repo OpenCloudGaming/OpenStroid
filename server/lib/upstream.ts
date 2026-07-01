@@ -1,7 +1,10 @@
 import axios, { AxiosError } from 'axios';
+import fs from 'node:fs';
+import { randomUUID } from 'node:crypto';
+import path from 'node:path';
 import { serverConfig } from '../config.js';
 import { createSession, type BridgeSession } from './session.js';
-import { sha256 } from './crypto.js';
+import { decrypt, encrypt, sha256 } from './crypto.js';
 
 const upstreamClient = axios.create({
   baseURL: serverConfig.upstreamBaseUrl,
@@ -18,9 +21,235 @@ export interface UpstreamTokens {
   user_data?: unknown;
 }
 
-const refreshRequests = new Map<string, Promise<UpstreamTokens>>();
+export interface CookieAuthCookie {
+  name: string;
+  value: string;
+  domain: string;
+  path: string;
+  expires: number;
+  httpOnly: boolean;
+  secure: boolean;
+  sameSite: string;
+}
 
-function unwrapRecord(data: unknown): Record<string, unknown> {
+interface CookieAuthSession {
+  cookieHeader: string;
+  cookies: CookieAuthCookie[];
+  createdAt: number;
+  updatedAt: number;
+}
+
+interface PersistedCookieAuthStore {
+  version: 1;
+  sessions: Record<string, CookieAuthSession>;
+}
+
+const refreshRequests = new Map<string, Promise<UpstreamTokens>>();
+const COOKIE_AUTH_PREFIX = 'cookie-auth:';
+const cookieAuthSessions = new Map<string, CookieAuthSession>();
+
+function isFreshCookieSession(session: CookieAuthSession): boolean {
+  const authCookies = session.cookies.filter((cookie) => (
+    cookie.name === 'access_token' ||
+    cookie.name === 'refresh_token' ||
+    cookie.name === 'boosteroid_auth'
+  ));
+  if (authCookies.length === 0) return Boolean(session.cookieHeader);
+  return authCookies.some((cookie) => cookie.expires <= 0 || cookie.expires * 1000 > Date.now() + 60_000);
+}
+
+function loadPersistedCookieAuthSessions(): void {
+  const raw = fs.existsSync(serverConfig.cookieAuthStorePath)
+    ? fs.readFileSync(serverConfig.cookieAuthStorePath, 'utf8')
+    : '';
+  if (!raw) return;
+
+  const store = decrypt<PersistedCookieAuthStore>(raw);
+  if (!store?.sessions) return;
+
+  for (const [id, session] of Object.entries(store.sessions)) {
+    if (session?.cookieHeader && isFreshCookieSession(session)) {
+      cookieAuthSessions.set(id, session);
+    }
+  }
+}
+
+function persistCookieAuthSessions(): void {
+  const sessions = Object.fromEntries(
+    [...cookieAuthSessions.entries()].filter(([, session]) => isFreshCookieSession(session)),
+  );
+
+  fs.mkdirSync(path.dirname(serverConfig.cookieAuthStorePath), { recursive: true });
+  fs.writeFileSync(serverConfig.cookieAuthStorePath, encrypt({ version: 1, sessions }), 'utf8');
+}
+
+loadPersistedCookieAuthSessions();
+
+export function restoreCookieAuthToken(value: string, cookieHeader: string, cookies: CookieAuthCookie[] = []): boolean {
+  if (!value.startsWith(COOKIE_AUTH_PREFIX) || !cookieHeader) {
+    return false;
+  }
+
+  const id = value.slice(COOKIE_AUTH_PREFIX.length);
+  const now = Date.now();
+  cookieAuthSessions.set(id, {
+    cookieHeader,
+    cookies,
+    createdAt: cookieAuthSessions.get(id)?.createdAt ?? now,
+    updatedAt: now,
+  });
+  persistCookieAuthSessions();
+  return true;
+}
+
+export function createCookieAuthToken(cookieHeader: string, cookies: CookieAuthCookie[] = []): string {
+  const id = randomUUID();
+  const now = Date.now();
+  cookieAuthSessions.set(id, { cookieHeader, cookies, createdAt: now, updatedAt: now });
+  persistCookieAuthSessions();
+  return `${COOKIE_AUTH_PREFIX}${id}`;
+}
+
+export function readCookieAuthToken(value: string): string | null {
+  if (!value.startsWith(COOKIE_AUTH_PREFIX)) {
+    return null;
+  }
+
+  try {
+    const payload = value.slice(COOKIE_AUTH_PREFIX.length);
+    const stored = cookieAuthSessions.get(payload)?.cookieHeader;
+    if (stored) {
+      return stored;
+    }
+
+    return Buffer.from(payload, 'base64url').toString('utf8');
+  } catch {
+    return null;
+  }
+}
+
+export function isCookieAuthToken(value: string): boolean {
+  return Boolean(readCookieAuthToken(value));
+}
+
+export function getCookieAuthCookies(value: string): CookieAuthCookie[] {
+  if (!value.startsWith(COOKIE_AUTH_PREFIX)) {
+    return [];
+  }
+
+  return cookieAuthSessions.get(value.slice(COOKIE_AUTH_PREFIX.length))?.cookies ?? [];
+}
+
+function upstreamAuthHeaders(accessToken: string): Record<string, string> {
+  const cookieHeader = readCookieAuthToken(accessToken);
+  if (cookieHeader) {
+    const cookies = getCookieAuthCookies(accessToken);
+    const headers: Record<string, string> = {
+      Cookie: cookieHeader,
+      Origin: serverConfig.upstreamBaseUrl,
+      Referer: `${serverConfig.upstreamBaseUrl}/`,
+    };
+    const accessCookie = cookies.find((cookie) => cookie.name === 'access_token');
+    const boosteroidAuthCookie = cookies.find((cookie) => cookie.name === 'boosteroid_auth');
+    if (accessCookie?.value) {
+      headers.Authorization = normalizeAuthorizationValue(accessCookie.value);
+    }
+    if (boosteroidAuthCookie?.value) {
+      headers['Authorization-Data'] = boosteroidAuthCookie.value;
+    }
+    return headers;
+  }
+
+  return { Authorization: normalizeAuthorizationValue(accessToken) };
+}
+
+async function upstreamGet<T>(accessToken: string, path: string): Promise<T> {
+  const { data } = await upstreamClient.get(path, {
+    headers: upstreamAuthHeaders(accessToken),
+  });
+  return data as T;
+}
+
+async function upstreamPost<T>(accessToken: string, path: string, body: unknown = {}): Promise<T> {
+  const { data } = await upstreamClient.post(path, body, {
+    headers: upstreamAuthHeaders(accessToken),
+  });
+  return data as T;
+}
+
+async function upstreamPatch<T>(accessToken: string, path: string, body: unknown = {}): Promise<T> {
+  const { data } = await upstreamClient.patch(path, body, {
+    headers: upstreamAuthHeaders(accessToken),
+  });
+  return data as T;
+}
+
+async function upstreamDelete<T>(accessToken: string, path: string): Promise<T> {
+  const { data } = await upstreamClient.delete(path, {
+    headers: upstreamAuthHeaders(accessToken),
+  });
+  return data as T;
+}
+
+function appendQuery(pathname: string, query?: Record<string, unknown>): string {
+  const params = new URLSearchParams();
+
+  for (const [key, value] of Object.entries(query ?? {})) {
+    if (value === undefined || value === null || value === '') continue;
+    if (Array.isArray(value)) {
+      value.forEach((item) => {
+        if (item !== undefined && item !== null && item !== '') {
+          params.append(key, String(item));
+        }
+      });
+      continue;
+    }
+    params.set(key, String(value));
+  }
+
+  const queryString = params.toString();
+  return queryString ? `${pathname}?${queryString}` : pathname;
+}
+
+function unwrapArray(data: unknown, keys: string[] = []): unknown[] {
+  if (Array.isArray(data)) return data;
+  if (!data || typeof data !== 'object') return [];
+
+  const record = data as Record<string, unknown>;
+  for (const key of ['data', 'applications', 'items', 'results', ...keys]) {
+    const value = record[key];
+    if (Array.isArray(value)) return value;
+    if (value && typeof value === 'object') {
+      const nested = unwrapArray(value, keys);
+      if (nested.length > 0) return nested;
+    }
+  }
+
+  return [];
+}
+
+function normalizeAuthorizationValue(accessToken: string): string {
+  const plusAsSpace = accessToken.replace(/\+/g, ' ');
+  let decoded = plusAsSpace;
+  try {
+    decoded = decodeURIComponent(plusAsSpace);
+  } catch {
+    decoded = plusAsSpace;
+  }
+
+  const trimmed = decoded.trim();
+  if (/^Bearer\s+/i.test(trimmed)) {
+    return trimmed.replace(/^Bearer\s+/i, 'Bearer ');
+  }
+
+  if (/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(trimmed)) {
+    return `Bearer ${trimmed}`;
+  }
+
+  return trimmed;
+}
+
+export function unwrapRecord(data: unknown): Record<string, unknown> {
   if (data && typeof data === 'object' && 'data' in data && data.data && typeof data.data === 'object') {
     return data.data as Record<string, unknown>;
   }
@@ -28,6 +257,17 @@ function unwrapRecord(data: unknown): Record<string, unknown> {
 }
 
 export function normalizeError(error: unknown): { status: number; message: string; details?: unknown } {
+  if (error instanceof Error) {
+    const typedError = error as Error & { status?: number; details?: unknown };
+    if (typeof typedError.status === 'number') {
+      return {
+        status: typedError.status,
+        message: typedError.message,
+        details: typedError.details,
+      };
+    }
+  }
+
   if (axios.isAxiosError(error)) {
     const status = error.response?.status ?? 502;
     const payload = error.response?.data as Record<string, unknown> | undefined;
@@ -64,27 +304,175 @@ export async function loginUpstream(payload: Record<string, string | boolean>): 
 }
 
 export async function getUpstreamUser(accessToken: string): Promise<Record<string, unknown>> {
-  const { data } = await upstreamClient.get('/api/v1/user', {
-    headers: { Authorization: accessToken },
-  });
-
+  const data = await upstreamGet<unknown>(accessToken, '/api/v1/user');
   return unwrapRecord(data);
 }
 
-export async function getInstalledGamesUpstream(accessToken: string): Promise<unknown[]> {
-  const { data } = await upstreamClient.get('/api/v1/boostore/applications/installed', {
-    headers: { Authorization: accessToken },
-  });
+export async function getInstalledGamesUpstream(accessToken: string, query?: Record<string, unknown>): Promise<unknown[]> {
+  const data = await upstreamGet<unknown>(accessToken, appendQuery('/api/v1/boostore/applications/installed', query));
+  return unwrapArray(data);
+}
 
+export async function getApplicationUpstream(accessToken: string, appId: number): Promise<Record<string, unknown>> {
+  const data = await upstreamGet<unknown>(accessToken, `/api/v1/boostore/applications/${appId}`);
+  return unwrapRecord(data);
+}
+
+export async function getBoostoreApplicationsUpstream(accessToken: string, query?: Record<string, unknown>): Promise<unknown[]> {
+  const data = await upstreamGet<unknown>(accessToken, appendQuery('/api/v1/boostore/applications', query));
+  return unwrapArray(data);
+}
+
+export async function searchBoostoreApplicationsUpstream(accessToken: string, query?: Record<string, unknown>): Promise<unknown[]> {
+  const data = await upstreamGet<unknown>(accessToken, appendQuery('/api/v1/boostore/applications/search', query));
+  return unwrapArray(data);
+}
+
+export async function getNewApplicationsUpstream(accessToken: string, query?: Record<string, unknown>): Promise<unknown[]> {
+  const data = await upstreamGet<unknown>(accessToken, appendQuery('/api/v1/boostore/applications/new', query));
+  return unwrapArray(data);
+}
+
+export async function getBoostoreCarouselUpstream(accessToken: string, query?: Record<string, unknown>): Promise<unknown[]> {
+  const data = await upstreamGet<unknown>(accessToken, appendQuery('/api/v1/boostore/carousel', query));
+  return unwrapArray(data, ['slides', 'carousel']);
+}
+
+export async function getApplicationCollectionsUpstream(accessToken: string): Promise<unknown[]> {
+  const data = await upstreamGet<unknown>(accessToken, '/api/v1/boostore/applications/collections');
+  return unwrapArray(data);
+}
+
+export async function getApplicationGenresUpstream(accessToken: string): Promise<unknown[]> {
+  const data = await upstreamGet<unknown>(accessToken, '/api/v1/boostore/applications/genres');
+  return unwrapArray(data);
+}
+
+export async function getApplicationPlatformsUpstream(accessToken: string): Promise<unknown[]> {
+  const data = await upstreamGet<unknown>(accessToken, '/api/v1/boostore/applications/platforms');
+  return unwrapArray(data);
+}
+
+export async function getApplicationStoresUpstream(accessToken: string, store?: string): Promise<unknown[]> {
+  const data = await upstreamGet<unknown>(
+    accessToken,
+    appendQuery('/api/v1/boostore/applications/stores', store ? { store } : undefined),
+  );
+  return unwrapArray(data);
+}
+
+export async function getApplicationOrderByUpstream(accessToken: string): Promise<unknown[]> {
+  const data = await upstreamGet<unknown>(accessToken, '/api/v1/boostore/applications/filters/order-by');
+  return unwrapArray(data);
+}
+
+export async function installApplicationUpstream(accessToken: string, appId: number): Promise<Record<string, unknown>> {
+  const data = await upstreamPatch<unknown>(accessToken, `/api/v1/boostore/applications/installed/${appId}`, {});
+  return unwrapRecord(data);
+}
+
+export async function uninstallApplicationUpstream(accessToken: string, appId: number): Promise<Record<string, unknown>> {
+  const data = await upstreamDelete<unknown>(accessToken, `/api/v1/boostore/applications/installed/${appId}`);
+  return unwrapRecord(data);
+}
+
+export async function synchronizeInstalledApplicationUpstream(
+  accessToken: string,
+  platform: string,
+): Promise<Record<string, unknown>> {
+  const data = await upstreamPost<unknown>(
+    accessToken,
+    `/api/v1/boostore/applications/installed/synchronize/${encodeURIComponent(platform)}`,
+    {},
+  );
+  return unwrapRecord(data);
+}
+
+export async function getLastSynchronizeUpstream(accessToken: string, platform: string): Promise<Record<string, unknown>> {
+  const data = await upstreamGet<unknown>(
+    accessToken,
+    `/api/v1/boostore/applications/installed/synchronize/${encodeURIComponent(platform)}`,
+  );
+  return unwrapRecord(data);
+}
+
+export async function getActiveSubscriptionsUpstream(accessToken: string): Promise<unknown[]> {
+  const data = await upstreamGet<unknown>(accessToken, '/api/v1/payments/subscriptions/active');
+  return unwrapArray(data, ['subscriptions']);
+}
+
+export async function getUserLanguagesUpstream(accessToken: string): Promise<unknown[]> {
+  const data = await upstreamGet<unknown>(accessToken, '/api/v1/user/languages');
+  return unwrapArray(data, ['languages']);
+}
+
+export async function getStreamingGatewaysUpstream(accessToken: string): Promise<unknown[]> {
+  const data = await upstreamGet<unknown>(accessToken, '/api/v1/streaming/gateways');
   if (Array.isArray(data)) return data;
   if (data && typeof data === 'object' && Array.isArray((data as { data?: unknown[] }).data)) {
     return (data as { data: unknown[] }).data;
   }
-  if (data && typeof data === 'object' && Array.isArray((data as { applications?: unknown[] }).applications)) {
-    return (data as { applications: unknown[] }).applications;
-  }
-
   return [];
+}
+
+export async function getStreamingSessionDetailsUpstream(accessToken: string, sessionId: string): Promise<Record<string, unknown>> {
+  const data = await upstreamPost<unknown>(
+    accessToken,
+    `/api/v1/streaming/session/details?sessionId=${encodeURIComponent(sessionId)}`,
+    null,
+  );
+  return unwrapRecord(data);
+}
+
+export async function enqueueStreamingSessionUpstream(accessToken: string, appId: number): Promise<Record<string, unknown>> {
+  const data = await upstreamPost<unknown>(accessToken, '/api/v2/streaming/session/enqueue', { appId });
+  return unwrapRecord(data);
+}
+
+export async function dequeueStreamingSessionUpstream(accessToken: string): Promise<Record<string, unknown>> {
+  const data = await upstreamPost<unknown>(accessToken, '/api/v2/streaming/session/dequeue', {});
+  return unwrapRecord(data);
+}
+
+export async function postStreamingSessionLogUpstream(
+  accessToken: string,
+  payload: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const data = await upstreamPost<unknown>(accessToken, '/api/v1/streaming/session/log', payload);
+  return unwrapRecord(data);
+}
+
+export async function submitStreamingSessionEvaluationUpstream(
+  accessToken: string,
+  payload: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const data = await upstreamPost<unknown>(accessToken, '/api/v1/streaming/session/evaluation', payload);
+  return unwrapRecord(data);
+}
+
+export async function getLastSessionUpstream(accessToken: string): Promise<Record<string, unknown>> {
+  const data = await upstreamGet<unknown>(accessToken, '/api/v1/streaming/user/last-session');
+  return unwrapRecord(data);
+}
+
+export async function getLastSessionLiveUpstream(accessToken: string): Promise<Record<string, unknown>> {
+  const data = await upstreamGet<unknown>(accessToken, '/api/v1/streaming/user/last-session/live');
+  return unwrapRecord(data);
+}
+
+export async function getActiveSessionsUpstream(accessToken: string): Promise<Record<string, unknown>> {
+  const data = await upstreamGet<unknown>(accessToken, '/api/v1/streaming/user/active-sessions');
+  return unwrapRecord(data);
+}
+
+export async function startStreamingSessionV1Upstream(accessToken: string, appId: number): Promise<Record<string, unknown>> {
+  const data = await upstreamPost<unknown>(accessToken, '/api/v1/streaming/session/start', { appId });
+  return unwrapRecord(data);
+}
+
+export async function startStreamingSessionV2Upstream(accessToken: string, appId: number, sessionToken: string): Promise<Record<string, unknown>> {
+  const data = await upstreamPost<unknown>(accessToken, '/api/v2/streaming/session/start', { appId, sessionToken });
+  return unwrapRecord(data);
 }
 
 export async function logoutUpstream(accessToken: string): Promise<void> {
@@ -92,7 +480,7 @@ export async function logoutUpstream(accessToken: string): Promise<void> {
     '/api/v2/auth/logout',
     {},
     {
-      headers: { Authorization: accessToken },
+      headers: upstreamAuthHeaders(accessToken),
     },
   );
 }
@@ -142,7 +530,7 @@ export async function withRefresh<T>(
   } catch (error) {
     const isUnauthorized = error instanceof AxiosError ? error.response?.status === 401 : false;
 
-    if (!isUnauthorized) {
+    if (!isUnauthorized || readCookieAuthToken(session.accessToken)) {
       throw error;
     }
 

@@ -1,29 +1,29 @@
 import { createTheme, type MantineColorsTuple } from '@mantine/core';
 
 const brand: MantineColorsTuple = [
-  '#e6fcff',
-  '#b3f5ff',
-  '#80eeff',
-  '#4de7ff',
-  '#1ae0ff',
-  '#00d4f5',
-  '#00a8c4',
-  '#007c93',
-  '#005062',
-  '#002431',
+  '#ecfff2',
+  '#d3fbe0',
+  '#a8f4bf',
+  '#79ec9c',
+  '#58d98a',
+  '#37c56f',
+  '#269c55',
+  '#1c7641',
+  '#13502d',
+  '#092817',
 ];
 
 const accent: MantineColorsTuple = [
-  '#f0e6ff',
-  '#d1b3ff',
-  '#b380ff',
-  '#944dff',
-  '#761aff',
-  '#6600f5',
-  '#5200c4',
-  '#3d0093',
-  '#290062',
-  '#140031',
+  '#e9f4ff',
+  '#cce4ff',
+  '#99c8ff',
+  '#66abff',
+  '#3d93f7',
+  '#267ee1',
+  '#1d63b2',
+  '#164983',
+  '#0f3158',
+  '#07192d',
 ];
 
 export const theme = createTheme({
@@ -49,14 +49,14 @@ export const theme = createTheme({
   headings: {
     fontFamily:
       'Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
-    fontWeight: '700',
+    fontWeight: '600',
   },
   radius: {
     xs: '4px',
     sm: '6px',
     md: '8px',
-    lg: '12px',
-    xl: '16px',
+    lg: '8px',
+    xl: '10px',
   },
   defaultRadius: 'md',
   components: {
@@ -64,20 +64,66 @@ export const theme = createTheme({
       defaultProps: {
         radius: 'md',
       },
+      styles: {
+        root: {
+          fontWeight: 700,
+        },
+      },
     },
     TextInput: {
       defaultProps: {
         radius: 'md',
+      },
+      styles: {
+        input: {
+          backgroundColor: '#1a1a1f',
+          borderColor: 'rgba(255,255,255,0.09)',
+        },
       },
     },
     PasswordInput: {
       defaultProps: {
         radius: 'md',
       },
+      styles: {
+        input: {
+          backgroundColor: '#1a1a1f',
+          borderColor: 'rgba(255,255,255,0.09)',
+        },
+      },
     },
     Card: {
       defaultProps: {
-        radius: 'lg',
+        radius: 'md',
+      },
+    },
+    Paper: {
+      defaultProps: {
+        radius: 'md',
+      },
+    },
+    Select: {
+      styles: {
+        input: {
+          backgroundColor: '#1a1a1f',
+          borderColor: 'rgba(255,255,255,0.09)',
+        },
+        dropdown: {
+          backgroundColor: '#151518',
+          borderColor: 'rgba(255,255,255,0.09)',
+        },
+      },
+    },
+    SegmentedControl: {
+      styles: {
+        root: {
+          backgroundColor: '#1a1a1f',
+          border: '1px solid rgba(255,255,255,0.08)',
+        },
+        indicator: {
+          backgroundColor: 'rgba(88,217,138,0.16)',
+          border: '1px solid rgba(88,217,138,0.42)',
+        },
       },
     },
   },

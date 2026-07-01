@@ -17,7 +17,8 @@ apiClient.interceptors.response.use(
     const requestUrl = error.config?.url ?? '';
     const shouldBroadcastUnauthorized =
       error.response?.status === 401 &&
-      requestUrl !== API_CONFIG.endpoints.login &&
+      requestUrl !== API_CONFIG.endpoints.loginStart &&
+      requestUrl !== API_CONFIG.endpoints.loginStatus &&
       requestUrl !== API_CONFIG.endpoints.session;
 
     if (shouldBroadcastUnauthorized && typeof window !== 'undefined') {

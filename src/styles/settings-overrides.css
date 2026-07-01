@@ -1,0 +1,130 @@
+@keyframes settings-overlay-in {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes settings-panel-in {
+  from {
+    opacity: 0;
+    transform: scale(0.98) translateY(10px);
+  }
+
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+
+.animated-modal-overlay {
+  animation: settings-overlay-in 220ms var(--t-normal) both;
+}
+
+.settings-modal {
+  animation: settings-panel-in 280ms var(--t-normal) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animated-modal-overlay,
+  .settings-modal {
+    animation: none;
+  }
+}
+
+.settings-inline-badge--online {
+  color: var(--accent);
+  background: var(--accent-surface);
+  border-color: rgba(var(--accent-rgb), 0.24);
+}
+
+.settings-inline-badge--offline {
+  color: #fca5a5;
+  background: rgba(248, 113, 113, 0.12);
+  border-color: rgba(248, 113, 113, 0.22);
+}
+
+.settings-inline-badge--checking {
+  color: #93c5fd;
+  background: rgba(59, 130, 246, 0.12);
+  border-color: rgba(59, 130, 246, 0.25);
+}
+
+.settings-path-value {
+  flex: 1;
+  min-width: 0;
+  padding: 7px 12px;
+  border-radius: 6px;
+  border: 1px solid var(--panel-border-solid);
+  background: var(--bg-a);
+  color: var(--ink-soft);
+  font-size: 0.74rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settings-toggle-grid {
+  padding: 4px 18px 8px;
+}
+
+.settings-toggle-grid .settings-row {
+  padding: 14px 0;
+}
+
+.settings-footer-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 12px 18px 22px;
+}
+
+.settings-account-badge-row {
+  margin-top: 8px;
+}
+
+.settings-account-actions {
+  display: flex;
+  align-items: center;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  gap: 10px;
+  justify-content: flex-end;
+}
+
+@media (max-width: 900px) {
+  .animated-modal-overlay {
+    padding: 12px;
+  }
+
+  .settings-modal {
+    width: calc(100vw - 24px);
+    height: calc(100vh - 24px);
+    max-height: calc(100vh - 24px);
+  }
+
+  .settings-modal-header {
+    align-items: flex-start;
+    padding: 14px;
+  }
+
+  .settings-layout {
+    flex-direction: column;
+  }
+
+  .settings-sidebar {
+    width: 100%;
+    border-right: 0;
+    border-bottom: 1px solid var(--panel-border);
+  }
+
+  .settings-content {
+    padding: 16px;
+  }
+}
