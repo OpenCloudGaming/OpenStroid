@@ -47,7 +47,10 @@ export function AuthCaptureDebugPanel({
   }, []);
 
   useEffect(() => {
-    void load();
+    const handle = window.setTimeout(() => {
+      void load();
+    }, 0);
+    return () => window.clearTimeout(handle);
   }, [load]);
 
   if (variant === 'settings') {
