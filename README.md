@@ -11,7 +11,6 @@ OpenStroid is now an Electron-first desktop client.
 - The React UI is rendered inside the Electron window.
 - The Chrome extension in `extension/openstroid-capture/` runs in the user's real Chrome profile and talks to the Electron bridge over localhost.
 - The desktop bridge validates captured upstream state, persists raw artifacts to `.runtime/auth-captures/`, creates the encrypted OpenStroid session, and continues to proxy normalized `/auth`, `/me`, and `/library` routes.
-- A backend-owned browser fallback still exists, but it is secondary to the extension flow.
 
 ## Local development
 
@@ -56,7 +55,7 @@ Use `npm run dev:bridge` only if you need the local bridge without launching Ele
 
 | Method | Route | Description |
 |---|---|---|
-| `POST` | `/auth/login/start` | Start a capture session from the desktop UI (`extension` primary, `browser` fallback) |
+| `POST` | `/auth/login/start` | Start an extension capture session from the desktop UI |
 | `GET` | `/auth/login/status` | Read latest capture status and establish the local OpenStroid session on success |
 | `GET` | `/auth/login/status/:id` | Read status for a specific capture session |
 | `POST` | `/auth/login/cancel` | Cancel the active capture |
@@ -82,15 +81,7 @@ Use `npm run dev:bridge` only if you need the local bridge without launching Ele
 | `COOKIE_SECURE` | `false` in dev, `true` in production | Whether to mark the auth cookie as `Secure`. |
 | `APP_ORIGIN` | *(unset)* | Optional allowed renderer/browser origin if frontend and bridge are split. |
 | `AUTH_CAPTURE_ARTIFACT_DIR` | `<project>/.runtime/auth-captures` | Directory where raw capture JSON artifacts are written. |
-| `BROWSER_USER_DATA_DIR` | `<project>/.runtime/browser-profile` | Persistent profile directory for the browser fallback path. |
-| `BROWSER_LOGIN_TIMEOUT_MS` | `300000` | Maximum time allowed for manual upstream login before timing out. |
-| `BROWSER_LOGIN_POLL_INTERVAL_MS` | `1500` | Interval used while checking whether upstream auth cookies/tokens are ready. |
-| `BROWSER_LAUNCH_NAVIGATE_TIMEOUT_MS` | `30000` | Initial page navigation timeout for the browser fallback. |
-| `BROWSER_HEADLESS` | `false` | Whether to launch the browser fallback headlessly. Visible mode is recommended. |
-| `BROWSER_CHANNEL` | `chrome` when no explicit executable is found | Preferred browser channel for the fallback path. |
-| `BROWSER_EXECUTABLE_PATH` | auto-detects system Chrome/Chromium | Optional explicit browser executable path. |
-| `BROWSER_LOCALE` | `en-US` | Locale for the browser fallback profile. |
-| `BROWSER_LAUNCH_ARGS` | *(unset)* | Comma-separated extra browser launch arguments. |
+| `AUTH_CAPTURE_TIMEOUT_MS` | `300000` | Maximum time allowed for the extension login session before timing out. |
 | `BACKEND_PROXY_TARGET` | `http://127.0.0.1:3001` | Vite-only proxy target for local renderer development. |
 | `ELECTRON_RENDERER_URL` | `http://127.0.0.1:3000` | Dev-only renderer URL opened by Electron. |
 
@@ -101,7 +92,6 @@ Use `npm run dev:bridge` only if you need the local bridge without launching Ele
 - Response metadata is captured via `webRequest`, while JSON auth/session payloads are captured from page `fetch`/XHR instrumentation on Boosteroid pages.
 - The extension never automates the Turnstile widget or login form. It passively observes the real session after the user acts normally.
 - The pairing code remains required before the extension can discover an active ingest token from the local bridge.
-- The Electron-managed browser fallback remains secondary and should not be treated as the primary product path.
 
 ## Project structure
 
@@ -110,7 +100,7 @@ electron/
 └── main.ts                     # Electron main process, window creation, bridge startup
 server/
 ├── app.ts                      # Reusable local bridge app and startup helpers
-├── config.ts                   # Runtime config for bridge + fallback browser
+├── config.ts                   # Runtime config for the bridge
 ├── index.ts                    # Standalone bridge entrypoint for non-Electron use
 └── lib/
     ├── crypto.ts              # Encrypted cookie helpers

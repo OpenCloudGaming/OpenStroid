@@ -177,6 +177,57 @@ async function upstreamPost<T>(accessToken: string, path: string, body: unknown 
   return data as T;
 }
 
+async function upstreamPatch<T>(accessToken: string, path: string, body: unknown = {}): Promise<T> {
+  const { data } = await upstreamClient.patch(path, body, {
+    headers: upstreamAuthHeaders(accessToken),
+  });
+  return data as T;
+}
+
+async function upstreamDelete<T>(accessToken: string, path: string): Promise<T> {
+  const { data } = await upstreamClient.delete(path, {
+    headers: upstreamAuthHeaders(accessToken),
+  });
+  return data as T;
+}
+
+function appendQuery(pathname: string, query?: Record<string, unknown>): string {
+  const params = new URLSearchParams();
+
+  for (const [key, value] of Object.entries(query ?? {})) {
+    if (value === undefined || value === null || value === '') continue;
+    if (Array.isArray(value)) {
+      value.forEach((item) => {
+        if (item !== undefined && item !== null && item !== '') {
+          params.append(key, String(item));
+        }
+      });
+      continue;
+    }
+    params.set(key, String(value));
+  }
+
+  const queryString = params.toString();
+  return queryString ? `${pathname}?${queryString}` : pathname;
+}
+
+function unwrapArray(data: unknown, keys: string[] = []): unknown[] {
+  if (Array.isArray(data)) return data;
+  if (!data || typeof data !== 'object') return [];
+
+  const record = data as Record<string, unknown>;
+  for (const key of ['data', 'applications', 'items', 'results', ...keys]) {
+    const value = record[key];
+    if (Array.isArray(value)) return value;
+    if (value && typeof value === 'object') {
+      const nested = unwrapArray(value, keys);
+      if (nested.length > 0) return nested;
+    }
+  }
+
+  return [];
+}
+
 function normalizeAuthorizationValue(accessToken: string): string {
   const plusAsSpace = accessToken.replace(/\+/g, ' ');
   let decoded = plusAsSpace;
@@ -257,23 +308,102 @@ export async function getUpstreamUser(accessToken: string): Promise<Record<strin
   return unwrapRecord(data);
 }
 
-export async function getInstalledGamesUpstream(accessToken: string): Promise<unknown[]> {
-  const data = await upstreamGet<unknown>(accessToken, '/api/v1/boostore/applications/installed');
-
-  if (Array.isArray(data)) return data;
-  if (data && typeof data === 'object' && Array.isArray((data as { data?: unknown[] }).data)) {
-    return (data as { data: unknown[] }).data;
-  }
-  if (data && typeof data === 'object' && Array.isArray((data as { applications?: unknown[] }).applications)) {
-    return (data as { applications: unknown[] }).applications;
-  }
-
-  return [];
+export async function getInstalledGamesUpstream(accessToken: string, query?: Record<string, unknown>): Promise<unknown[]> {
+  const data = await upstreamGet<unknown>(accessToken, appendQuery('/api/v1/boostore/applications/installed', query));
+  return unwrapArray(data);
 }
 
 export async function getApplicationUpstream(accessToken: string, appId: number): Promise<Record<string, unknown>> {
   const data = await upstreamGet<unknown>(accessToken, `/api/v1/boostore/applications/${appId}`);
   return unwrapRecord(data);
+}
+
+export async function getBoostoreApplicationsUpstream(accessToken: string, query?: Record<string, unknown>): Promise<unknown[]> {
+  const data = await upstreamGet<unknown>(accessToken, appendQuery('/api/v1/boostore/applications', query));
+  return unwrapArray(data);
+}
+
+export async function searchBoostoreApplicationsUpstream(accessToken: string, query?: Record<string, unknown>): Promise<unknown[]> {
+  const data = await upstreamGet<unknown>(accessToken, appendQuery('/api/v1/boostore/applications/search', query));
+  return unwrapArray(data);
+}
+
+export async function getNewApplicationsUpstream(accessToken: string, query?: Record<string, unknown>): Promise<unknown[]> {
+  const data = await upstreamGet<unknown>(accessToken, appendQuery('/api/v1/boostore/applications/new', query));
+  return unwrapArray(data);
+}
+
+export async function getBoostoreCarouselUpstream(accessToken: string, query?: Record<string, unknown>): Promise<unknown[]> {
+  const data = await upstreamGet<unknown>(accessToken, appendQuery('/api/v1/boostore/carousel', query));
+  return unwrapArray(data, ['slides', 'carousel']);
+}
+
+export async function getApplicationCollectionsUpstream(accessToken: string): Promise<unknown[]> {
+  const data = await upstreamGet<unknown>(accessToken, '/api/v1/boostore/applications/collections');
+  return unwrapArray(data);
+}
+
+export async function getApplicationGenresUpstream(accessToken: string): Promise<unknown[]> {
+  const data = await upstreamGet<unknown>(accessToken, '/api/v1/boostore/applications/genres');
+  return unwrapArray(data);
+}
+
+export async function getApplicationPlatformsUpstream(accessToken: string): Promise<unknown[]> {
+  const data = await upstreamGet<unknown>(accessToken, '/api/v1/boostore/applications/platforms');
+  return unwrapArray(data);
+}
+
+export async function getApplicationStoresUpstream(accessToken: string, store?: string): Promise<unknown[]> {
+  const data = await upstreamGet<unknown>(
+    accessToken,
+    appendQuery('/api/v1/boostore/applications/stores', store ? { store } : undefined),
+  );
+  return unwrapArray(data);
+}
+
+export async function getApplicationOrderByUpstream(accessToken: string): Promise<unknown[]> {
+  const data = await upstreamGet<unknown>(accessToken, '/api/v1/boostore/applications/filters/order-by');
+  return unwrapArray(data);
+}
+
+export async function installApplicationUpstream(accessToken: string, appId: number): Promise<Record<string, unknown>> {
+  const data = await upstreamPatch<unknown>(accessToken, `/api/v1/boostore/applications/installed/${appId}`, {});
+  return unwrapRecord(data);
+}
+
+export async function uninstallApplicationUpstream(accessToken: string, appId: number): Promise<Record<string, unknown>> {
+  const data = await upstreamDelete<unknown>(accessToken, `/api/v1/boostore/applications/installed/${appId}`);
+  return unwrapRecord(data);
+}
+
+export async function synchronizeInstalledApplicationUpstream(
+  accessToken: string,
+  platform: string,
+): Promise<Record<string, unknown>> {
+  const data = await upstreamPost<unknown>(
+    accessToken,
+    `/api/v1/boostore/applications/installed/synchronize/${encodeURIComponent(platform)}`,
+    {},
+  );
+  return unwrapRecord(data);
+}
+
+export async function getLastSynchronizeUpstream(accessToken: string, platform: string): Promise<Record<string, unknown>> {
+  const data = await upstreamGet<unknown>(
+    accessToken,
+    `/api/v1/boostore/applications/installed/synchronize/${encodeURIComponent(platform)}`,
+  );
+  return unwrapRecord(data);
+}
+
+export async function getActiveSubscriptionsUpstream(accessToken: string): Promise<unknown[]> {
+  const data = await upstreamGet<unknown>(accessToken, '/api/v1/payments/subscriptions/active');
+  return unwrapArray(data, ['subscriptions']);
+}
+
+export async function getUserLanguagesUpstream(accessToken: string): Promise<unknown[]> {
+  const data = await upstreamGet<unknown>(accessToken, '/api/v1/user/languages');
+  return unwrapArray(data, ['languages']);
 }
 
 export async function getStreamingGatewaysUpstream(accessToken: string): Promise<unknown[]> {
@@ -301,6 +431,22 @@ export async function enqueueStreamingSessionUpstream(accessToken: string, appId
 
 export async function dequeueStreamingSessionUpstream(accessToken: string): Promise<Record<string, unknown>> {
   const data = await upstreamPost<unknown>(accessToken, '/api/v2/streaming/session/dequeue', {});
+  return unwrapRecord(data);
+}
+
+export async function postStreamingSessionLogUpstream(
+  accessToken: string,
+  payload: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const data = await upstreamPost<unknown>(accessToken, '/api/v1/streaming/session/log', payload);
+  return unwrapRecord(data);
+}
+
+export async function submitStreamingSessionEvaluationUpstream(
+  accessToken: string,
+  payload: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const data = await upstreamPost<unknown>(accessToken, '/api/v1/streaming/session/evaluation', payload);
   return unwrapRecord(data);
 }
 

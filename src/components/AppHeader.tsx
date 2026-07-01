@@ -1,35 +1,23 @@
-import { Group, Text, Menu, Avatar, UnstyledButton, Box } from '@mantine/core';
-import { IconLogout, IconUser, IconChevronDown } from '@tabler/icons-react';
+import { Badge, Box, Group, Text, Menu, Avatar, UnstyledButton } from '@mantine/core';
+import { IconLogout, IconUser, IconChevronDown, IconPlugConnected } from '@tabler/icons-react';
 import { useAuth } from '../auth';
 
 export function AppHeader() {
   const { user, logout } = useAuth();
 
   return (
-    <Group h="100%" px="lg" justify="space-between">
-      <Group gap="xs">
-        <Box
-          style={{
-            width: 32,
-            height: 32,
-            borderRadius: 8,
-            background: 'linear-gradient(135deg, #00d4f5 0%, #6600f5 100%)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-          }}
+    <Group h="100%" px="lg" justify="space-between" wrap="nowrap">
+      <Group gap="sm" wrap="nowrap">
+        <Badge
+          variant="light"
+          color="teal"
+          leftSection={<IconPlugConnected size={13} />}
+          styles={{ root: { textTransform: 'none' } }}
         >
-          <Text fw={800} size="sm" c="white" style={{ lineHeight: 1 }}>
-            OS
-          </Text>
-        </Box>
-        <Text
-          fw={700}
-          size="lg"
-          variant="gradient"
-          gradient={{ from: 'brand.4', to: 'accent.4', deg: 135 }}
-        >
-          OpenStroid Desktop
+          Bridge online
+        </Badge>
+        <Text size="sm" c="dimmed" visibleFrom="sm">
+          {user?.email ?? 'Authenticated'}
         </Text>
       </Group>
 

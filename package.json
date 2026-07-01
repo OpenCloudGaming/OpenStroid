@@ -27,7 +27,6 @@
     "cookie-parser": "^1.4.7",
     "electron": "^37.2.1",
     "express": "^5.2.1",
-    "playwright": "^1.53.1",
     "react": "^19.2.4",
     "react-dom": "^19.2.4",
     "react-router-dom": "^7.14.0"

@@ -1,35 +1,18 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { chromium, type Browser, type BrowserContext, type Cookie, type Page } from 'playwright';
 import { serverConfig } from '../config.js';
 import { createSession, type BridgeSession } from './session.js';
 import { createCookieAuthToken, getUpstreamUser, restoreCookieAuthToken, unwrapRecord } from './upstream.js';
 
 const LOGIN_URL = 'https://boosteroid.com';
 const AUTH_COOKIE_NAMES = ['access_token', 'refresh_token', 'boosteroid_auth', 'qr_auth_code'] as const;
-const RELEVANT_PATH_PATTERNS = [
-  '/api/v1/auth/login',
-  '/api/v1/auth/refresh-token',
-  '/api/v2/auth/logout',
-  '/api/v1/user',
-  '/api/v1/boostore/applications/installed',
-  '/auth',
-  '/login',
-  '/session',
-];
 const FINAL_STATUSES = new Set(['succeeded', 'failed', 'cancelled', 'timed_out'] as const);
-const DEFAULT_BROWSER_ARGS = [
-  '--start-maximized',
-  '--window-size=1440,960',
-  '--disable-blink-features=AutomationControlled',
-  '--disable-features=IsolateOrigins,site-per-process',
-];
 const MAX_CAPTURE_FILES = 25;
 
 type CaptureTerminalStatus = 'succeeded' | 'failed' | 'cancelled' | 'timed_out';
 export type CaptureStatus = 'starting' | 'awaiting_user' | 'succeeded' | 'failed' | 'cancelled' | 'timed_out';
-export type CaptureMethod = 'extension' | 'browser';
+export type CaptureMethod = 'extension';
 
 export interface CaptureEvent {
   timestamp: string;
@@ -41,7 +24,7 @@ export interface CaptureEvent {
   headers?: Record<string, string>;
   cookieNames?: string[];
   message?: string;
-  source?: 'browser' | 'extension';
+  source?: 'extension';
 }
 
 export interface StoredCookie {
@@ -73,7 +56,7 @@ export interface CaptureArtifact {
   observedResponses: CaptureEvent[];
   userPayload: Record<string, unknown> | null;
   bridgeSession: BridgeSession | null;
-  ingestSource?: 'browser' | 'extension';
+  ingestSource?: 'extension';
   extensionMetadata?: Record<string, unknown>;
   diagnostics?: CaptureDiagnostics;
 }
@@ -143,9 +126,6 @@ interface CaptureRuntime {
   updatedAtMs: number;
   timeoutAtMs: number;
   completedAtMs: number | null;
-  browser: Browser | null;
-  context: BrowserContext | null;
-  page: Page | null;
   events: CaptureEvent[];
   errors: string[];
   bridgeSession: BridgeSession | null;
@@ -159,37 +139,8 @@ function isTerminalStatus(status: CaptureStatus): boolean {
   return FINAL_STATUSES.has(status as CaptureTerminalStatus);
 }
 
-function isRelevantUrl(url: string): boolean {
-  return RELEVANT_PATH_PATTERNS.some((pattern) => url.includes(pattern)) ||
-    (url.includes('/api/') && url.includes('boosteroid')) ||
-    url.includes('/graphql') ||
-    url.includes('/sanctum') ||
-    url.includes('/oauth');
-}
-
 function toIso(ms: number | null): string | null {
   return ms ? new Date(ms).toISOString() : null;
-}
-
-function summarizeHeaders(headers: Record<string, string>): Record<string, string> {
-  const picked: Record<string, string> = {};
-  for (const key of ['content-type', 'location']) {
-    if (headers[key]) picked[key] = headers[key];
-  }
-  return picked;
-}
-
-function serializeCookie(cookie: Cookie): StoredCookie {
-  return {
-    name: cookie.name,
-    value: cookie.value,
-    domain: cookie.domain,
-    path: cookie.path,
-    expires: cookie.expires,
-    httpOnly: cookie.httpOnly,
-    secure: cookie.secure,
-    sameSite: cookie.sameSite,
-  };
 }
 
 function normalizeCookie(cookie: Partial<StoredCookie> & Pick<StoredCookie, 'name' | 'value'>): StoredCookie {
@@ -203,10 +154,6 @@ function normalizeCookie(cookie: Partial<StoredCookie> & Pick<StoredCookie, 'nam
     secure: Boolean(cookie.secure),
     sameSite: cookie.sameSite ?? 'Lax',
   };
-}
-
-function dedupeArgs(...groups: string[][]): string[] {
-  return [...new Set(groups.flat().filter(Boolean))];
 }
 
 function generatePairingCode(): string {
@@ -470,10 +417,6 @@ async function ensureArtifactDir(): Promise<void> {
   await fs.mkdir(serverConfig.authCaptureArtifactDir, { recursive: true });
 }
 
-async function ensureBrowserProfileDir(): Promise<void> {
-  await fs.mkdir(serverConfig.browserUserDataDir, { recursive: true });
-}
-
 async function pruneArtifacts(): Promise<void> {
   const entries = await fs.readdir(serverConfig.authCaptureArtifactDir, { withFileTypes: true }).catch(() => []);
   const files = await Promise.all(entries.filter((entry) => entry.isFile() && entry.name.endsWith('.json')).map(async (entry) => {
@@ -491,34 +434,6 @@ async function persistArtifact(artifact: CaptureArtifact): Promise<string> {
   await fs.writeFile(filePath, `${JSON.stringify(artifact, null, 2)}\n`, 'utf8');
   await pruneArtifacts();
   return filePath;
-}
-
-async function applyStealthDefaults(context: BrowserContext): Promise<void> {
-  await context.addInitScript(`
-    Object.defineProperty(navigator, 'webdriver', {
-      get: () => undefined,
-      configurable: true,
-    });
-
-    if (!('chrome' in window)) {
-      Object.defineProperty(window, 'chrome', {
-        value: { runtime: {} },
-        configurable: true,
-      });
-    }
-
-    const originalQuery = navigator.permissions && navigator.permissions.query
-      ? navigator.permissions.query.bind(navigator.permissions)
-      : null;
-
-    if (originalQuery) {
-      navigator.permissions.query = (parameters) => (
-        parameters && parameters.name === 'notifications'
-          ? Promise.resolve({ state: Notification.permission })
-          : originalQuery(parameters)
-      );
-    }
-  `);
 }
 
 class AuthCaptureManager {
@@ -544,15 +459,12 @@ class AuthCaptureManager {
       id: randomUUID(),
       method,
       ingestToken: randomUUID(),
-      extensionPairingCode: method === 'extension' ? generatePairingCode() : null,
-      status: method === 'extension' ? 'awaiting_user' : 'starting',
+      extensionPairingCode: generatePairingCode(),
+      status: 'awaiting_user',
       startedAtMs: now,
       updatedAtMs: now,
-      timeoutAtMs: now + serverConfig.browserLoginTimeoutMs,
+      timeoutAtMs: now + serverConfig.authCaptureTimeoutMs,
       completedAtMs: null,
-      browser: null,
-      context: null,
-      page: null,
       events: [],
       errors: [],
       bridgeSession: null,
@@ -567,14 +479,8 @@ class AuthCaptureManager {
       timestamp: new Date().toISOString(),
       type: 'note',
       source: method,
-      message: method === 'extension'
-        ? 'Waiting for Chrome extension capture from a real user browser session.'
-        : 'Launching backend browser capture fallback.',
+      message: 'Waiting for Chrome extension capture from a real user browser session.',
     });
-
-    if (method === 'browser') {
-      capture.waitPromise = this.runBrowserCapture(capture);
-    }
 
     return {
       id: capture.id,
@@ -826,7 +732,7 @@ class AuthCaptureManager {
       completedAt: toIso(capture.completedAtMs),
       timeoutAt: new Date(capture.timeoutAtMs).toISOString(),
       loginUrl: LOGIN_URL,
-      finalUrl: capture.page?.url() ?? null,
+      finalUrl: null,
       upstreamBaseUrl: serverConfig.upstreamBaseUrl,
       errors: [...capture.errors],
       eventCount: capture.events.length,
@@ -882,11 +788,7 @@ class AuthCaptureManager {
 
     let artifact = artifactOverride;
     if (!artifact) {
-      const cookies = capture.context ? (await capture.context.cookies()).map(serializeCookie) : [];
       artifact = this.createBaseArtifact(capture);
-      artifact.finalUrl = capture.page?.url() ?? artifact.finalUrl;
-      artifact.allCookies = cookies;
-      artifact.authCookies = pickAuthCookies(cookies);
       artifact.eventCount = capture.events.length;
       artifact.observedResponses = capture.events.filter((event) => event.type === 'response' || event.type === 'note');
       artifact.userPayload = (capture.bridgeSession?.user as Record<string, unknown> | undefined) ?? null;
@@ -905,157 +807,6 @@ class AuthCaptureManager {
     capture.persistedPath = await persistArtifact(artifact);
     this.latestArtifact = artifact;
     this.latestArtifactPath = capture.persistedPath;
-
-    await capture.page?.close().catch(() => undefined);
-    await capture.context?.close().catch(() => undefined);
-    await capture.browser?.close().catch(() => undefined);
-    capture.page = null;
-    capture.context = null;
-    capture.browser = null;
-  }
-
-  private attachBrowserNetworkListeners(capture: CaptureRuntime, page: Page): void {
-    page.on('framenavigated', (frame) => {
-      if (frame === page.mainFrame()) {
-        this.pushEvent(capture, {
-          timestamp: new Date().toISOString(),
-          type: 'page',
-          source: 'browser',
-          url: frame.url(),
-          message: 'Main frame navigated.',
-        });
-      }
-    });
-
-    page.on('request', (request) => {
-      const url = request.url();
-      if (!isRelevantUrl(url)) return;
-      this.pushEvent(capture, {
-        timestamp: new Date().toISOString(),
-        type: 'request',
-        source: 'browser',
-        method: request.method(),
-        url,
-        message: 'Observed relevant request.',
-      });
-    });
-
-    page.on('response', async (response) => {
-      const url = response.url();
-      if (!isRelevantUrl(url)) return;
-      const headers = response.headers();
-      const event: CaptureEvent = {
-        timestamp: new Date().toISOString(),
-        type: 'response',
-        source: 'browser',
-        method: response.request().method(),
-        url,
-        status: response.status(),
-        headers: summarizeHeaders(headers),
-        message: 'Observed relevant response.',
-      };
-
-      const headerArray = await response.headersArray();
-      const setCookieValues = headerArray
-        .filter((header) => header.name.toLowerCase() === 'set-cookie')
-        .map((header) => header.value);
-      if (setCookieValues.length > 0) {
-        event.cookieNames = setCookieValues.map((value) => value.split('=')[0] ?? '').filter(Boolean);
-      }
-
-      const contentType = headers['content-type'] ?? '';
-      if (contentType.includes('application/json')) {
-        try {
-          event.payload = await response.json();
-        } catch {
-          event.message = 'Observed relevant response, but JSON payload could not be parsed.';
-        }
-      }
-
-      this.pushEvent(capture, event);
-    });
-
-    page.on('pageerror', (error) => {
-      this.pushEvent(capture, {
-        timestamp: new Date().toISOString(),
-        type: 'error',
-        source: 'browser',
-        message: error.message,
-      });
-    });
-  }
-
-  private async runBrowserCapture(capture: CaptureRuntime): Promise<void> {
-    try {
-      await ensureArtifactDir();
-      await ensureBrowserProfileDir();
-
-      const context = await chromium.launchPersistentContext(serverConfig.browserUserDataDir, {
-        headless: serverConfig.browserHeadless,
-        channel: serverConfig.browserChannel || undefined,
-        executablePath: serverConfig.browserExecutablePath || undefined,
-        locale: serverConfig.browserLocale,
-        timezoneId: 'UTC',
-        viewport: null,
-        ignoreHTTPSErrors: false,
-        args: dedupeArgs(DEFAULT_BROWSER_ARGS, serverConfig.browserLaunchArgs),
-        ignoreDefaultArgs: ['--enable-automation'],
-      });
-      await applyStealthDefaults(context);
-
-      const page = context.pages().at(-1) ?? await context.newPage();
-      capture.browser = context.browser();
-      capture.context = context;
-      capture.page = page;
-      capture.status = 'awaiting_user';
-      capture.updatedAtMs = Date.now();
-      this.attachBrowserNetworkListeners(capture, page);
-      this.pushEvent(capture, {
-        timestamp: new Date().toISOString(),
-        type: 'note',
-        source: 'browser',
-        message: `Browser launched in persistent profile mode using ${serverConfig.browserExecutablePath ?? serverConfig.browserChannel ?? 'default browser'}. Waiting for manual Boosteroid login.`,
-      });
-
-      await page.bringToFront().catch(() => undefined);
-      await page.goto(LOGIN_URL, { waitUntil: 'domcontentloaded', timeout: serverConfig.browserLaunchNavigateTimeoutMs });
-
-      while (Date.now() < capture.timeoutAtMs) {
-        if (capture.cancelled) {
-          await this.finalize(capture, 'cancelled', 'Capture cancelled by user.');
-          return;
-        }
-
-        const cookies = capture.context ? (await capture.context.cookies()).map(serializeCookie) : [];
-        const cookieTokens = extractTokensFromCookies(cookies);
-        const payloadTokens = extractTokensFromEvents(capture.events);
-        const accessToken = cookieTokens.accessToken ?? payloadTokens.accessToken;
-        const refreshToken = cookieTokens.refreshToken ?? payloadTokens.refreshToken;
-
-        if (accessToken && refreshToken) {
-          const user = await getUpstreamUser(accessToken);
-          capture.bridgeSession = createSession({
-            accessToken,
-            refreshToken,
-            userData: payloadTokens.userData,
-            user,
-          });
-          await this.finalize(capture, 'succeeded', 'Successfully captured authenticated Boosteroid session via backend browser fallback.');
-          return;
-        }
-
-        await page.waitForTimeout(serverConfig.browserLoginPollIntervalMs);
-      }
-
-      await this.finalize(capture, 'timed_out', 'Login capture timed out before an authenticated session was detected.');
-    } catch (error) {
-      if (capture.cancelled) {
-        return;
-      }
-      const message = error instanceof Error ? error.message : 'Unexpected browser capture failure.';
-      capture.errors.push(message);
-      await this.finalize(capture, 'failed', message);
-    }
   }
 }
 

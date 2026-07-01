@@ -9,6 +9,7 @@ import { RequireAuth } from './components/RequireAuth';
 import { AuthenticatedLayout } from './layouts/AuthenticatedLayout';
 import { LoginPage } from './pages/LoginPage';
 import { LibraryPage } from './pages/LibraryPage';
+import { InstallPage } from './pages/InstallPage';
 import { StreamPage } from './pages/StreamPage';
 
 export default function App() {
@@ -28,6 +29,7 @@ export default function App() {
               }
             >
               <Route path="/library" element={<LibraryPage />} />
+              <Route path="/install" element={<InstallPage />} />
             </Route>
             <Route path="*" element={<Navigate to="/library" replace />} />
           </Routes>

@@ -55,8 +55,8 @@ export const theme = createTheme({
     xs: '4px',
     sm: '6px',
     md: '8px',
-    lg: '12px',
-    xl: '16px',
+    lg: '8px',
+    xl: '10px',
   },
   defaultRadius: 'md',
   components: {
@@ -77,7 +77,7 @@ export const theme = createTheme({
     },
     Card: {
       defaultProps: {
-        radius: 'lg',
+        radius: 'md',
       },
     },
   },

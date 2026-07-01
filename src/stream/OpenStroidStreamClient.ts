@@ -1,4 +1,4 @@
-import type { StreamClientConfig } from '../types';
+import type { StreamClientConfig, StreamRealtimeStats } from '../types';
 
 const DEFAULT_ICE_SERVERS: RTCIceServer[] = [
   { urls: 'stun:stun.l.google.com:19302' },
@@ -17,6 +17,7 @@ type StreamStatus =
 type LogHandler = (message: string) => void;
 type StatusHandler = (status: StreamStatus | string) => void;
 export type StreamMouseMode = 'absolute' | 'relative';
+export type StreamQualityPreset = 'auto' | 'high' | 'balanced' | 'dataSaver';
 
 export interface StreamCursorState {
   x: number;
@@ -30,6 +31,7 @@ export interface StreamCursorState {
 
 type CursorHandler = (cursor: StreamCursorState) => void;
 type MouseModeHandler = (mode: StreamMouseMode) => void;
+type StatsHandler = (stats: StreamRealtimeStats) => void;
 type InputHandlerName =
   | 'click'
   | 'contextmenu'
@@ -51,6 +53,17 @@ interface StreamClientOptions {
   onStatus?: StatusHandler;
   onCursor?: CursorHandler;
   onMouseMode?: MouseModeHandler;
+  onStats?: StatsHandler;
+}
+
+interface StreamRuntimeSettings {
+  maxBitrateMbps: number;
+  maxFramerate: 60 | 120;
+  fsrEnabled: boolean;
+  microphoneEnabled: boolean;
+  hdrEnabled: boolean;
+  fillerEnabled: boolean;
+  quality: StreamQualityPreset;
 }
 
 type GatewayCandidate = string | { address?: unknown; gw?: unknown; gateway?: unknown; url?: unknown };
@@ -335,15 +348,18 @@ export class OpenStroidStreamClient {
   private readonly onStatus: StatusHandler;
   private readonly onCursor: CursorHandler;
   private readonly onMouseMode: MouseModeHandler;
+  private readonly onStats: StatsHandler;
   private ws: WebSocket | null = null;
   private pc: RTCPeerConnection | null = null;
   private dataChannel: RTCDataChannel | null = null;
+  private currentConfig: StreamClientConfig | null = null;
   private sessionId = '';
   private sessionQuery = '';
   private gatewayHost = '';
   private webrtcApiBase = '';
   private peerId = '';
   private preferredCodec = 'auto';
+  private gatewayCodec = '';
   private gateways: unknown[] = [];
   private remoteIceTimer: number | null = null;
   private statsTimer: number | null = null;
@@ -363,6 +379,15 @@ export class OpenStroidStreamClient {
     packetsReceived: number;
     packetsLost: number;
   } | null = null;
+  private runtimeSettings: StreamRuntimeSettings = {
+    maxBitrateMbps: 20,
+    maxFramerate: 60,
+    fsrEnabled: false,
+    microphoneEnabled: false,
+    hdrEnabled: false,
+    fillerEnabled: false,
+    quality: 'auto',
+  };
   private handlers: Partial<Record<InputHandlerName, EventListener>> = {};
 
   constructor(options: StreamClientOptions) {
@@ -372,6 +397,7 @@ export class OpenStroidStreamClient {
     this.onStatus = options.onStatus ?? (() => undefined);
     this.onCursor = options.onCursor ?? (() => undefined);
     this.onMouseMode = options.onMouseMode ?? (() => undefined);
+    this.onStats = options.onStats ?? (() => undefined);
   }
 
   async setMouseMode(mode: StreamMouseMode) {
@@ -397,8 +423,85 @@ export class OpenStroidStreamClient {
     await this.setMouseMode(this.mouseMode === 'relative' ? 'absolute' : 'relative');
   }
 
+  setAudioVolume(volume: number) {
+    const normalized = Math.min(Math.max(Math.round(volume), 0), 100);
+    this.audioElement.volume = normalized / 100;
+    this.audioElement.muted = normalized === 0;
+    return normalized;
+  }
+
+  setMuted(muted: boolean) {
+    this.audioElement.muted = muted;
+    return this.audioElement.muted;
+  }
+
+  setQuality(quality: StreamQualityPreset) {
+    this.runtimeSettings.quality = quality;
+    const bitrateByQuality: Record<StreamQualityPreset, number | null> = {
+      auto: null,
+      high: 24,
+      balanced: 14,
+      dataSaver: 7,
+    };
+    const nextBitrate = bitrateByQuality[quality];
+    if (nextBitrate !== null) {
+      this.setMaxBitrateMbps(nextBitrate);
+    }
+  }
+
+  setMaxBitrateMbps(value: number) {
+    const maxBitrateMbps = Math.min(Math.max(Math.round(value), 3), 40);
+    this.runtimeSettings.maxBitrateMbps = maxBitrateMbps;
+    this.sendEvent({
+      type: 'stream',
+      action: 'bitrate_max',
+      value: maxBitrateMbps * 1_000_000,
+    });
+    this.log(`Max bitrate set to ${maxBitrateMbps} Mbps`);
+    return maxBitrateMbps;
+  }
+
+  setMaxFramerate(value: number) {
+    const maxFramerate = value >= 120 ? 120 : 60;
+    this.runtimeSettings.maxFramerate = maxFramerate;
+    this.sendEvent({ type: 'stream', action: 'refreshRate', value: maxFramerate });
+    this.log(`Max refresh rate set to ${maxFramerate} FPS`);
+    return maxFramerate;
+  }
+
+  setFsrEnabled(enabled: boolean) {
+    this.runtimeSettings.fsrEnabled = enabled;
+    this.sendEvent({ type: 'stream', action: 'fsr', value: enabled });
+    this.log(`FSR ${enabled ? 'enabled' : 'disabled'}`);
+  }
+
+  setMicrophoneEnabled(enabled: boolean) {
+    this.runtimeSettings.microphoneEnabled = enabled;
+    this.sendEvent({ type: 'settings', action: 'microphone', value: enabled });
+    this.log(`Microphone ${enabled ? 'enabled' : 'disabled'}`);
+  }
+
+  sendClipboardPaste(text: string) {
+    if (!text) return;
+    this.sendEvent({ type: 'clipboard', action: 'paste', value: text });
+    this.log(`Sent clipboard paste payload length=${text.length}`);
+  }
+
+  getRuntimeSettings() {
+    return { ...this.runtimeSettings };
+  }
+
+  async reconnect() {
+    if (!this.currentConfig) {
+      throw new Error('No previous stream launch config is available.');
+    }
+    this.log('Manual reconnect requested');
+    await this.connect(this.currentConfig);
+  }
+
   async connect(config: StreamClientConfig) {
     await this.disconnect(true);
+    this.currentConfig = config;
     this.log(`Launch config: session=${config.sessionId} gateways=${config.gateways?.length ?? 0} queries=${config.sessionQueries?.length ?? 0}`);
     const queries = (config.sessionQueries ?? []).filter((query) => typeof query === 'string' && query.trim());
     if (config.sessionQuery) queries.unshift(config.sessionQuery);
@@ -487,7 +590,7 @@ export class OpenStroidStreamClient {
       x: String(width),
       y: String(height),
       lang: 'en',
-      refreshRate: '60',
+      refreshRate: String(this.runtimeSettings.maxFramerate),
       rtcEngine: 'webrtc',
       clientType: 'web',
       devType: 'desktop',
@@ -539,6 +642,20 @@ export class OpenStroidStreamClient {
 
     if (message.type === 'stream' && message.action === 'getstatus') {
       this.sendGatewayStatus();
+      return;
+    }
+
+    if (message.type === 'stream' && message.action === 'setstatus') {
+      const value = message.value && typeof message.value === 'object'
+        ? message.value as Record<string, unknown>
+        : {};
+      if (typeof value.codec === 'string') this.gatewayCodec = value.codec;
+      if (typeof value.hdr === 'boolean') this.runtimeSettings.hdrEnabled = value.hdr;
+      if (typeof value.framerate === 'number') {
+        this.runtimeSettings.maxFramerate = value.framerate >= 120 ? 120 : 60;
+      }
+      if (typeof value.fsr === 'boolean') this.runtimeSettings.fsrEnabled = value.fsr;
+      this.log(`Gateway status updated codec=${this.gatewayCodec || 'unknown'} fps=${this.runtimeSettings.maxFramerate}`);
       return;
     }
 
@@ -779,14 +896,17 @@ export class OpenStroidStreamClient {
       const response = await fetch(url);
       if (!response.ok) return '';
       const payload = (await response.json()) as { codec?: unknown };
-      return typeof payload.codec === 'string' ? payload.codec : '';
+      const codec = typeof payload.codec === 'string' ? payload.codec : '';
+      this.gatewayCodec = codec;
+      return codec;
     } catch {
       return '';
     }
   }
 
   private sendGatewayStatus() {
-    const maxFramerate = 60;
+    const maxFramerate = this.runtimeSettings.maxFramerate;
+    const maxBitrate = this.runtimeSettings.maxBitrateMbps * 1_000_000;
     this.log('Sending stream status response');
     this.sendEvent({ type: 'keyboard', action: 'language', code: 1033 });
     this.sendEvent({
@@ -799,17 +919,21 @@ export class OpenStroidStreamClient {
         gpu: 'unknown',
         proto: 1,
         framerate_max: maxFramerate,
-        bitrate_max: 20_000_000,
-        hdr: false,
+        bitrate_max: maxBitrate,
+        hdr: this.runtimeSettings.hdrEnabled,
         cursor_zip: 'CompressionStream' in window,
-        filler: false,
+        filler: this.runtimeSettings.fillerEnabled,
         beta: 0,
         rtcEngine: 'webrtc',
         rtcAudio: 'pcm',
         network_type: connectionType(),
+        ...(this.preferredCodec === 'av1' ? { codec: 'av1' } : {}),
       },
     });
     this.sendEvent({ type: 'stream', action: 'refreshRate', value: maxFramerate });
+    if (this.runtimeSettings.fsrEnabled) {
+      this.sendEvent({ type: 'stream', action: 'fsr', value: true });
+    }
   }
 
   private async fetchIceServers() {
@@ -1080,14 +1204,28 @@ export class OpenStroidStreamClient {
       }
       const elapsedSec = Math.max(0.001, (report.timestamp - this.statsPrev.timestamp) / 1000);
       const packetDiff = packetsReceived - this.statsPrev.packetsReceived;
+      const realBitrate = Math.max(0, Math.round(((bytesReceived - this.statsPrev.bytesReceived) * 8) / elapsedSec));
+      const decodedFps = Math.max(0, Math.round((framesDecoded - this.statsPrev.framesDecoded) / elapsedSec));
+      const receivedFps = Math.max(0, Math.round((framesReceived - this.statsPrev.framesReceived) / elapsedSec));
+      const packetLoss = packetDiff > 0 ? Number((((packetsLost - this.statsPrev.packetsLost) * 100) / packetDiff).toFixed(2)) : 0;
       this.sendEvent({
         type: 'stream',
         action: 'bitrate',
-        realBitrate: Math.max(0, Math.round(((bytesReceived - this.statsPrev.bytesReceived) * 8) / elapsedSec)),
-        framerateDecoded: Math.max(0, Math.round((framesDecoded - this.statsPrev.framesDecoded) / elapsedSec)),
-        framerateReceived: Math.max(0, Math.round((framesReceived - this.statsPrev.framesReceived) / elapsedSec)),
-        lossPacket: packetDiff > 0 ? Number((((packetsLost - this.statsPrev.packetsLost) * 100) / packetDiff).toFixed(2)) : 0,
+        realBitrate,
+        framerateDecoded: decodedFps,
+        framerateReceived: receivedFps,
+        lossPacket: packetLoss,
         time: Date.now(),
+      });
+      this.onStats({
+        bitrate: realBitrate,
+        decodedFps,
+        receivedFps,
+        packetLoss,
+        connectionState: this.pc?.connectionState ?? 'unknown',
+        gatewayHost: this.gatewayHost,
+        codec: this.gatewayCodec || this.preferredCodec,
+        at: Date.now(),
       });
       this.statsPrev = { timestamp: report.timestamp, bytesReceived, framesDecoded, framesReceived, packetsReceived, packetsLost };
       return;

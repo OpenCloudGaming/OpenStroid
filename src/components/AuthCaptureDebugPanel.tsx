@@ -63,7 +63,7 @@ export function AuthCaptureDebugPanel({
           <Stack gap={2}>
             <Title order={compact ? 4 : 3} fw={600}>{title}</Title>
             <Text size="sm" c="dimmed">
-              Raw cookies, network payloads, and bridge session data captured by the backend-owned browser context.
+              Raw cookies, network payloads, and bridge session data submitted by the companion extension.
             </Text>
           </Stack>
           <Button
