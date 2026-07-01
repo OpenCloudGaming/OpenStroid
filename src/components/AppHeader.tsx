@@ -1,10 +1,11 @@
 import { Badge, Box, Group, Text, Menu, Avatar, UnstyledButton } from '@mantine/core';
 import { IconLogout, IconUser, IconChevronDown, IconPlugConnected, IconSettings } from '@tabler/icons-react';
-import { NavLink as RouterNavLink } from 'react-router-dom';
+import { NavLink as RouterNavLink, useLocation } from 'react-router-dom';
 import { useAuth } from '../auth';
 
 export function AppHeader() {
   const { user, logout } = useAuth();
+  const location = useLocation();
 
   return (
     <Group className="openstroid-header-right" gap="sm" wrap="nowrap">
@@ -59,6 +60,7 @@ export function AppHeader() {
           <Menu.Item
             component={RouterNavLink}
             to="/settings"
+            state={{ backgroundPath: location.pathname }}
             leftSection={<IconSettings size={14} />}
           >
             Settings

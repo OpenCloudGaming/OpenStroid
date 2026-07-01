@@ -35,6 +35,7 @@ export function AuthenticatedLayout() {
         key={item.to}
         component={RouterNavLink}
         to={item.to}
+        state={item.to === '/settings' ? { backgroundPath: location.pathname } : undefined}
         className="openstroid-nav-link"
         data-active={active}
         aria-current={active ? 'page' : undefined}
