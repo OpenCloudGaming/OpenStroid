@@ -292,17 +292,6 @@ export function normalizeError(error: unknown): { status: number; message: strin
   };
 }
 
-export async function loginUpstream(payload: Record<string, string | boolean>): Promise<UpstreamTokens> {
-  const { data } = await upstreamClient.post('/api/v1/auth/login', payload);
-  const envelope = unwrapRecord(data);
-
-  return {
-    access_token: String(envelope.access_token ?? ''),
-    refresh_token: String(envelope.refresh_token ?? ''),
-    user_data: envelope.user_data,
-  };
-}
-
 export async function getUpstreamUser(accessToken: string): Promise<Record<string, unknown>> {
   const data = await upstreamGet<unknown>(accessToken, '/api/v1/user');
   return unwrapRecord(data);
