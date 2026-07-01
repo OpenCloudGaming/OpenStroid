@@ -35,8 +35,15 @@ import {
   OpenStroidStreamClient,
   type StreamCursorState,
   type StreamMouseMode,
-  type StreamQualityPreset,
 } from '../stream/OpenStroidStreamClient';
+import {
+  STREAM_ENCODING_OPTIONS,
+  STREAM_QUALITY_OPTIONS,
+  STREAM_RESOLUTION_OPTIONS,
+  type StreamEncodingPreset,
+  type StreamQualityPreset,
+  type StreamResolutionPreset,
+} from '../stream/streamOptions';
 import { dequeueStreamSession, logStreamSession } from '../api';
 import { readAppSettings, SETTINGS_KEYS } from '../lib/userSettings';
 import type { StreamLaunchResponse, StreamRealtimeStats } from '../types';
@@ -87,6 +94,8 @@ export function StreamPage() {
   const [maxBitrate, setMaxBitrate] = useState(() => initialAppSettings.stream.maxBitrate);
   const [maxFps, setMaxFps] = useState(() => initialAppSettings.stream.maxFps);
   const [quality, setQuality] = useState<StreamQualityPreset>(() => initialAppSettings.stream.quality);
+  const [resolution, setResolution] = useState<StreamResolutionPreset>(() => initialAppSettings.stream.resolution);
+  const [encoding, setEncoding] = useState<StreamEncodingPreset>(() => initialAppSettings.stream.encoding);
   const [fsrEnabled, setFsrEnabled] = useState(() => initialAppSettings.stream.fsrEnabled);
   const [micEnabled, setMicEnabled] = useState(() => initialAppSettings.stream.micEnabled);
   const initialSettingsRef = useRef({
@@ -95,6 +104,8 @@ export function StreamPage() {
     maxBitrate,
     maxFps,
     quality,
+    resolution,
+    encoding,
     fsrEnabled,
     micEnabled,
   });
@@ -149,6 +160,8 @@ export function StreamPage() {
     client.setMaxBitrateMbps(initialSettings.maxBitrate);
     client.setMaxFramerate(initialSettings.maxFps);
     client.setQuality(initialSettings.quality);
+    client.setResolutionPreset(initialSettings.resolution);
+    client.setEncoding(initialSettings.encoding);
     client.setFsrEnabled(initialSettings.fsrEnabled);
     client.setMicrophoneEnabled(initialSettings.micEnabled);
     clientRef.current = client;
@@ -242,6 +255,18 @@ export function StreamPage() {
     const presetBitrate = value === 'high' ? 24 : value === 'balanced' ? 14 : value === 'dataSaver' ? 7 : maxBitrate;
     if (value !== 'auto') applyBitrate(presetBitrate);
   }, [applyBitrate, maxBitrate]);
+
+  const applyResolution = useCallback((value: StreamResolutionPreset) => {
+    setResolution(value);
+    window.localStorage.setItem(SETTINGS_KEYS.streamResolution, value);
+    clientRef.current?.setResolutionPreset(value);
+  }, []);
+
+  const applyEncoding = useCallback((value: StreamEncodingPreset) => {
+    setEncoding(value);
+    window.localStorage.setItem(SETTINGS_KEYS.streamEncoding, value);
+    clientRef.current?.setEncoding(value);
+  }, []);
 
   const toggleStats = useCallback(() => {
     setStatsVisible((current) => {
@@ -349,6 +374,8 @@ export function StreamPage() {
         opened={settingsOpened}
         onClose={() => setSettingsOpened(false)}
         quality={quality}
+        resolution={resolution}
+        encoding={encoding}
         maxBitrate={maxBitrate}
         maxFps={maxFps}
         volume={volume}
@@ -356,6 +383,8 @@ export function StreamPage() {
         fsrEnabled={fsrEnabled}
         micEnabled={micEnabled}
         onQualityChange={applyQuality}
+        onResolutionChange={applyResolution}
+        onEncodingChange={applyEncoding}
         onBitrateChange={applyBitrate}
         onFpsChange={applyFps}
         onVolumeChange={updateVolume}
@@ -541,6 +570,8 @@ function SettingsDrawer({
   opened,
   onClose,
   quality,
+  resolution,
+  encoding,
   maxBitrate,
   maxFps,
   volume,
@@ -548,6 +579,8 @@ function SettingsDrawer({
   fsrEnabled,
   micEnabled,
   onQualityChange,
+  onResolutionChange,
+  onEncodingChange,
   onBitrateChange,
   onFpsChange,
   onVolumeChange,
@@ -559,6 +592,8 @@ function SettingsDrawer({
   opened: boolean;
   onClose: () => void;
   quality: StreamQualityPreset;
+  resolution: StreamResolutionPreset;
+  encoding: StreamEncodingPreset;
   maxBitrate: number;
   maxFps: number;
   volume: number;
@@ -566,6 +601,8 @@ function SettingsDrawer({
   fsrEnabled: boolean;
   micEnabled: boolean;
   onQualityChange: (value: StreamQualityPreset) => void;
+  onResolutionChange: (value: StreamResolutionPreset) => void;
+  onEncodingChange: (value: StreamEncodingPreset) => void;
   onBitrateChange: (value: number) => void;
   onFpsChange: (value: number) => void;
   onVolumeChange: (value: number) => void;
@@ -582,14 +619,29 @@ function SettingsDrawer({
           <SegmentedControl
             value={quality}
             onChange={(value) => onQualityChange(value as StreamQualityPreset)}
-            data={[
-              { value: 'auto', label: 'Auto' },
-              { value: 'high', label: 'High' },
-              { value: 'balanced', label: 'Balanced' },
-              { value: 'dataSaver', label: 'Low' },
-            ]}
+            data={STREAM_QUALITY_OPTIONS}
             fullWidth
           />
+        </Stack>
+        <Stack gap="xs">
+          <Text size="sm" fw={800}>Resolution</Text>
+          <SegmentedControl
+            value={resolution}
+            onChange={(value) => onResolutionChange(value as StreamResolutionPreset)}
+            data={STREAM_RESOLUTION_OPTIONS.map(({ value, label }) => ({ value, label }))}
+            fullWidth
+          />
+          <Text size="xs" c="dimmed">Uses Boosteroid&apos;s WebRTC screenSize/x/y path.</Text>
+        </Stack>
+        <Stack gap="xs">
+          <Text size="sm" fw={800}>Encoding</Text>
+          <SegmentedControl
+            value={encoding}
+            onChange={(value) => onEncodingChange(value as StreamEncodingPreset)}
+            data={STREAM_ENCODING_OPTIONS}
+            fullWidth
+          />
+          <Text size="xs" c="dimmed">Applies on reconnect. AV1 falls back to H.264 if the browser or gateway rejects it.</Text>
         </Stack>
         <Stack gap="xs">
           <Group justify="space-between">

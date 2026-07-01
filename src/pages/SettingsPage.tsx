@@ -27,7 +27,11 @@ import {
   type AppSettings,
   type StreamDefaults,
 } from '../lib/userSettings';
-import type { StreamQualityPreset } from '../stream/OpenStroidStreamClient';
+import {
+  STREAM_ENCODING_OPTIONS,
+  STREAM_QUALITY_OPTIONS,
+  STREAM_RESOLUTION_OPTIONS,
+} from '../stream/streamOptions';
 
 const EXTENSION_PATH = 'C:\\Users\\Zortos\\Projects\\OpenStroid\\extension\\openstroid-capture';
 
@@ -51,7 +55,7 @@ const SETTINGS_NAV_GROUPS: Array<{
   {
     label: 'Streaming',
     items: [
-      { id: 'stream', label: 'Stream', icon: <Wifi size={15} />, keywords: ['quality', 'fps', 'bitrate', 'volume', 'audio', 'fsr', 'microphone', 'stats'] },
+      { id: 'stream', label: 'Stream', icon: <Wifi size={15} />, keywords: ['quality', 'resolution', 'encoding', 'codec', 'av1', 'h264', 'fps', 'bitrate', 'volume', 'audio', 'fsr', 'microphone', 'stats'] },
     ],
   },
   {
@@ -61,13 +65,6 @@ const SETTINGS_NAV_GROUPS: Array<{
       { id: 'diagnostics', label: 'Diagnostics', icon: <AlertCircle size={15} />, keywords: ['debug', 'capture', 'logs'] },
     ],
   },
-];
-
-const QUALITY_PRESETS: Array<{ value: StreamQualityPreset; label: string }> = [
-  { value: 'auto', label: 'Auto' },
-  { value: 'high', label: 'High' },
-  { value: 'balanced', label: 'Balanced' },
-  { value: 'dataSaver', label: 'Low' },
 ];
 
 function updateStreamSettings(settings: AppSettings, patch: Partial<StreamDefaults>): AppSettings {
@@ -275,12 +272,50 @@ export function SettingsPage({ onClose }: SettingsPageProps) {
                         Quality preset
                       </label>
                       <div className="settings-chip-row">
-                        {QUALITY_PRESETS.map((preset) => (
+                        {STREAM_QUALITY_OPTIONS.map((preset) => (
                           <button
                             key={preset.value}
                             type="button"
                             className={`settings-chip ${settings.stream.quality === preset.value ? 'active' : ''}`}
                             onClick={() => updateStream({ quality: preset.value })}
+                          >
+                            <span>{preset.label}</span>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="settings-row settings-row--column">
+                      <label className="settings-label settings-label--with-icon">
+                        <Monitor size={15} className="settings-label-icon" />
+                        Resolution
+                      </label>
+                      <div className="settings-chip-row">
+                        {STREAM_RESOLUTION_OPTIONS.map((preset) => (
+                          <button
+                            key={preset.value}
+                            type="button"
+                            className={`settings-chip ${settings.stream.resolution === preset.value ? 'active' : ''}`}
+                            onClick={() => updateStream({ resolution: preset.value })}
+                          >
+                            <span>{preset.label}</span>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="settings-row settings-row--column">
+                      <label className="settings-label settings-label--with-icon">
+                        <Wifi size={15} className="settings-label-icon" />
+                        Encoding
+                      </label>
+                      <div className="settings-chip-row">
+                        {STREAM_ENCODING_OPTIONS.map((preset) => (
+                          <button
+                            key={preset.value}
+                            type="button"
+                            className={`settings-chip ${settings.stream.encoding === preset.value ? 'active' : ''}`}
+                            onClick={() => updateStream({ encoding: preset.value })}
                           >
                             <span>{preset.label}</span>
                           </button>

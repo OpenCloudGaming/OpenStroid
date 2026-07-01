@@ -1,4 +1,10 @@
 import type { StreamClientConfig, StreamRealtimeStats } from '../types';
+import {
+  resolutionForPreset,
+  type StreamEncodingPreset,
+  type StreamQualityPreset,
+  type StreamResolutionPreset,
+} from './streamOptions';
 
 const DEFAULT_ICE_SERVERS: RTCIceServer[] = [
   { urls: 'stun:stun.l.google.com:19302' },
@@ -17,7 +23,7 @@ type StreamStatus =
 type LogHandler = (message: string) => void;
 type StatusHandler = (status: StreamStatus | string) => void;
 export type StreamMouseMode = 'absolute' | 'relative';
-export type StreamQualityPreset = 'auto' | 'high' | 'balanced' | 'dataSaver';
+type StreamVideoCodec = 'h264' | 'av1';
 
 export interface StreamCursorState {
   x: number;
@@ -59,6 +65,8 @@ interface StreamClientOptions {
 interface StreamRuntimeSettings {
   maxBitrateMbps: number;
   maxFramerate: 60 | 120;
+  resolution: StreamResolutionPreset;
+  encoding: StreamEncodingPreset;
   fsrEnabled: boolean;
   microphoneEnabled: boolean;
   hdrEnabled: boolean;
@@ -149,6 +157,23 @@ function connectionType() {
   return connection?.effectiveType ?? 'unknown';
 }
 
+let av1SupportPromise: Promise<boolean> | null = null;
+
+async function supportsAv1Decoding() {
+  if (!navigator.mediaCapabilities?.decodingInfo) return false;
+  av1SupportPromise ??= navigator.mediaCapabilities.decodingInfo({
+    type: 'media-source',
+    video: {
+      contentType: 'video/webm; codecs=av01.0.08M.08',
+      width: Math.max(window.screen.width || 0, window.innerWidth || 0, 1280),
+      height: Math.max(window.screen.height || 0, window.innerHeight || 0, 720),
+      bitrate: 40_000_000,
+      framerate: 60,
+    },
+  }).then((result) => Boolean(result.supported && result.smooth)).catch(() => false);
+  return av1SupportPromise;
+}
+
 function numberFromMessage(value: unknown) {
   return typeof value === 'number' && Number.isFinite(value) ? value : null;
 }
@@ -159,6 +184,20 @@ function boolFromMessage(value: unknown, fallback: boolean) {
 
 function clamp01(value: number) {
   return Math.min(Math.max(value, 0), 1);
+}
+
+function toLandscapeResolution(width: number, height: number) {
+  const normalizedWidth = Math.max(Number(width) || 0, Number(height) || 0);
+  const normalizedHeight = Math.min(Number(width) || 0, Number(height) || 0);
+
+  if (!Number.isFinite(normalizedWidth) || !Number.isFinite(normalizedHeight) || normalizedWidth <= 0 || normalizedHeight <= 0) {
+    return { width: 1920, height: 1080 };
+  }
+
+  return {
+    width: Math.round(normalizedWidth),
+    height: Math.round(normalizedHeight),
+  };
 }
 
 function base64ToBytes(value: string) {
@@ -358,7 +397,8 @@ export class OpenStroidStreamClient {
   private gatewayHost = '';
   private webrtcApiBase = '';
   private peerId = '';
-  private preferredCodec = 'auto';
+  private preferredCodec: StreamEncodingPreset = 'h264';
+  private activeCodec: StreamVideoCodec = 'h264';
   private gatewayCodec = '';
   private gateways: unknown[] = [];
   private remoteIceTimer: number | null = null;
@@ -382,6 +422,8 @@ export class OpenStroidStreamClient {
   private runtimeSettings: StreamRuntimeSettings = {
     maxBitrateMbps: 20,
     maxFramerate: 60,
+    resolution: 'auto',
+    encoding: 'h264',
     fsrEnabled: false,
     microphoneEnabled: false,
     hdrEnabled: false,
@@ -469,6 +511,21 @@ export class OpenStroidStreamClient {
     return maxFramerate;
   }
 
+  setResolutionPreset(value: StreamResolutionPreset) {
+    this.runtimeSettings.resolution = value;
+    const resolution = this.resolveResolution();
+    this.sendEvent({ type: 'stream', action: 'screenSize', value: resolution });
+    this.log(`Resolution set to ${value === 'auto' ? `auto (${resolution.width}x${resolution.height})` : `${resolution.width}x${resolution.height}`}`);
+    return resolution;
+  }
+
+  setEncoding(value: StreamEncodingPreset) {
+    this.runtimeSettings.encoding = value;
+    this.preferredCodec = value;
+    this.log(`Encoding set to ${value === 'h264' ? 'H.264' : value.toUpperCase()}`);
+    return value;
+  }
+
   setFsrEnabled(enabled: boolean) {
     this.runtimeSettings.fsrEnabled = enabled;
     this.sendEvent({ type: 'stream', action: 'fsr', value: enabled });
@@ -515,7 +572,7 @@ export class OpenStroidStreamClient {
 
     this.sessionId = config.sessionId || sessionIdFromQuery(query);
     this.sessionQuery = query;
-    this.preferredCodec = config.preferredCodec ?? 'auto';
+    this.preferredCodec = this.runtimeSettings.encoding;
     this.gateways = config.gateways ?? [];
 
     this.setStatus('Preparing');
@@ -578,14 +635,28 @@ export class OpenStroidStreamClient {
   }
 
   private async selectedCodec() {
-    if (this.preferredCodec === 'av1' || this.preferredCodec === 'h264') return this.preferredCodec;
+    if (this.preferredCodec === 'h264') return 'h264';
+    if (await supportsAv1Decoding()) return 'av1';
+    if (this.preferredCodec === 'av1') this.log('AV1 is not supported by this browser; falling back to H.264');
     return 'h264';
+  }
+
+  private resolveResolution() {
+    const preset = resolutionForPreset(this.runtimeSettings.resolution);
+    if (preset?.width && preset.height) {
+      return { width: preset.width, height: preset.height };
+    }
+
+    return toLandscapeResolution(
+      Math.max(1280, Math.round(window.innerWidth * window.devicePixelRatio)),
+      Math.max(720, Math.round(window.innerHeight * window.devicePixelRatio)),
+    );
   }
 
   private async openControlWebSocket() {
     const codec = await this.selectedCodec();
-    const width = Math.max(1280, Math.round(window.innerWidth * window.devicePixelRatio));
-    const height = Math.max(720, Math.round(window.innerHeight * window.devicePixelRatio));
+    this.activeCodec = codec;
+    const { width, height } = this.resolveResolution();
     const params = new URLSearchParams({
       x: String(width),
       y: String(height),
@@ -601,7 +672,7 @@ export class OpenStroidStreamClient {
     const wsUrl = `wss://${this.gatewayHost}/?${this.sessionQuery}&${params.toString()}`;
 
     this.setStatus('Opening control socket');
-    this.log(`Opening control socket on ${this.gatewayHost}; codec=${codec}`);
+    this.log(`Opening control socket on ${this.gatewayHost}; codec=${codec} resolution=${width}x${height}`);
     await new Promise<void>((resolve, reject) => {
       let settled = false;
       const ws = new WebSocket(wsUrl);
@@ -868,7 +939,7 @@ export class OpenStroidStreamClient {
 
   private async prepareOfferSdp(sdp: string) {
     const gatewayCodec = await this.fetchGatewayCodec();
-    const allowAv1 = gatewayCodec !== 'H264' && this.preferredCodec === 'av1';
+    const allowAv1 = gatewayCodec !== 'H264' && this.activeCodec === 'av1';
     const allowedCodecs = [
       ...(allowAv1 ? ['video/AV1'] : []),
       'video/H264',
@@ -927,7 +998,7 @@ export class OpenStroidStreamClient {
         rtcEngine: 'webrtc',
         rtcAudio: 'pcm',
         network_type: connectionType(),
-        ...(this.preferredCodec === 'av1' ? { codec: 'av1' } : {}),
+        ...(this.activeCodec === 'av1' ? { codec: 'av1' } : {}),
       },
     });
     this.sendEvent({ type: 'stream', action: 'refreshRate', value: maxFramerate });
@@ -1224,7 +1295,7 @@ export class OpenStroidStreamClient {
         packetLoss,
         connectionState: this.pc?.connectionState ?? 'unknown',
         gatewayHost: this.gatewayHost,
-        codec: this.gatewayCodec || this.preferredCodec,
+        codec: this.gatewayCodec || this.activeCodec,
         at: Date.now(),
       });
       this.statsPrev = { timestamp: report.timestamp, bytesReceived, framesDecoded, framesReceived, packetsReceived, packetsLost };

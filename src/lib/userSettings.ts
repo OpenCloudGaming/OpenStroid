@@ -1,4 +1,11 @@
-import type { StreamQualityPreset } from '../stream/OpenStroidStreamClient';
+import {
+  isStreamEncodingPreset,
+  isStreamQualityPreset,
+  isStreamResolutionPreset,
+  type StreamEncodingPreset,
+  type StreamQualityPreset,
+  type StreamResolutionPreset,
+} from '../stream/streamOptions';
 
 export const SETTINGS_KEYS = {
   bridgeUrl: 'openstroid:bridgeUrl',
@@ -7,6 +14,8 @@ export const SETTINGS_KEYS = {
   streamBitrate: 'bitrateValue',
   streamFps: 'fpsRateValue',
   streamQuality: 'openstroid:streamQuality',
+  streamResolution: 'openstroid:streamResolution',
+  streamEncoding: 'openstroid:streamEncoding',
   streamFsr: 'openstroid:streamFsr',
   streamMic: 'openstroid:streamMic',
   streamStats: 'stream_stats_visible',
@@ -18,6 +27,8 @@ export interface StreamDefaults {
   maxBitrate: number;
   maxFps: number;
   quality: StreamQualityPreset;
+  resolution: StreamResolutionPreset;
+  encoding: StreamEncodingPreset;
   fsrEnabled: boolean;
   micEnabled: boolean;
   statsVisible: boolean;
@@ -36,6 +47,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
     maxBitrate: 20,
     maxFps: 60,
     quality: 'auto',
+    resolution: 'auto',
+    encoding: 'h264',
     fsrEnabled: false,
     micEnabled: false,
     statsVisible: true,
@@ -61,9 +74,17 @@ function readBool(key: string, fallback: boolean): boolean {
 
 function readQuality(): StreamQualityPreset {
   const raw = window.localStorage.getItem(SETTINGS_KEYS.streamQuality);
-  return raw === 'high' || raw === 'balanced' || raw === 'dataSaver' || raw === 'auto'
-    ? raw
-    : DEFAULT_SETTINGS.stream.quality;
+  return isStreamQualityPreset(raw) ? raw : DEFAULT_SETTINGS.stream.quality;
+}
+
+function readResolution(): StreamResolutionPreset {
+  const raw = window.localStorage.getItem(SETTINGS_KEYS.streamResolution);
+  return isStreamResolutionPreset(raw) ? raw : DEFAULT_SETTINGS.stream.resolution;
+}
+
+function readEncoding(): StreamEncodingPreset {
+  const raw = window.localStorage.getItem(SETTINGS_KEYS.streamEncoding);
+  return isStreamEncodingPreset(raw) ? raw : DEFAULT_SETTINGS.stream.encoding;
 }
 
 export function readAppSettings(): AppSettings {
@@ -75,6 +96,8 @@ export function readAppSettings(): AppSettings {
       maxBitrate: readNumber(SETTINGS_KEYS.streamBitrate, DEFAULT_SETTINGS.stream.maxBitrate, 3, 40),
       maxFps: readNumber(SETTINGS_KEYS.streamFps, DEFAULT_SETTINGS.stream.maxFps, 60, 120),
       quality: readQuality(),
+      resolution: readResolution(),
+      encoding: readEncoding(),
       fsrEnabled: readBool(SETTINGS_KEYS.streamFsr, DEFAULT_SETTINGS.stream.fsrEnabled),
       micEnabled: readBool(SETTINGS_KEYS.streamMic, DEFAULT_SETTINGS.stream.micEnabled),
       statsVisible: readBool(SETTINGS_KEYS.streamStats, DEFAULT_SETTINGS.stream.statsVisible),
@@ -89,6 +112,8 @@ export function saveAppSettings(settings: AppSettings): void {
   window.localStorage.setItem(SETTINGS_KEYS.streamBitrate, String(settings.stream.maxBitrate));
   window.localStorage.setItem(SETTINGS_KEYS.streamFps, String(settings.stream.maxFps));
   window.localStorage.setItem(SETTINGS_KEYS.streamQuality, settings.stream.quality);
+  window.localStorage.setItem(SETTINGS_KEYS.streamResolution, settings.stream.resolution);
+  window.localStorage.setItem(SETTINGS_KEYS.streamEncoding, settings.stream.encoding);
   window.localStorage.setItem(SETTINGS_KEYS.streamFsr, String(settings.stream.fsrEnabled));
   window.localStorage.setItem(SETTINGS_KEYS.streamMic, String(settings.stream.micEnabled));
   window.localStorage.setItem(SETTINGS_KEYS.streamStats, String(settings.stream.statsVisible));
