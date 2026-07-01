@@ -1008,9 +1008,6 @@ export function createBridgeApp() {
   const libraryQueryKeys = [
     'page',
     'paginate',
-    'perPage',
-    'limit',
-    'offset',
     'name',
     'search',
     'query',
@@ -1032,7 +1029,7 @@ export function createBridgeApp() {
     if (!session) return;
 
     try {
-      const query = pickQuery(req.query, ['page', 'paginate', 'perPage', 'limit', 'offset', 'store']);
+      const query = pickQuery(req.query, ['page', 'paginate', 'store']);
       const refreshed = await withRefresh(session, (accessToken) => getInstalledGamesUpstream(accessToken, query));
       writeSession(res, refreshed.session);
       res.json({ games: refreshed.result });
@@ -1149,7 +1146,7 @@ export function createBridgeApp() {
 
   function normalizeSearchQuery(query: Record<string, unknown>): Record<string, unknown> {
     const searchText = firstQueryString(query, ['name', 'search', 'query', 'title']);
-    return searchText ? { ...query, name: searchText } : query;
+    return searchText ? { name: searchText } : {};
   }
 
   app.get('/library/search', async (req, res, next) => {

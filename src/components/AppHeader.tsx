@@ -1,5 +1,6 @@
 import { Badge, Box, Group, Text, Menu, Avatar, UnstyledButton } from '@mantine/core';
-import { IconLogout, IconUser, IconChevronDown, IconPlugConnected } from '@tabler/icons-react';
+import { IconLogout, IconUser, IconChevronDown, IconPlugConnected, IconSettings } from '@tabler/icons-react';
+import { NavLink as RouterNavLink } from 'react-router-dom';
 import { useAuth } from '../auth';
 
 export function AppHeader() {
@@ -53,6 +54,13 @@ export function AppHeader() {
             disabled
           >
             Profile
+          </Menu.Item>
+          <Menu.Item
+            component={RouterNavLink}
+            to="/settings"
+            leftSection={<IconSettings size={14} />}
+          >
+            Settings
           </Menu.Item>
           <Menu.Divider />
           <Menu.Item

@@ -1,6 +1,6 @@
 import { Outlet, useLocation } from 'react-router-dom';
 import { AppShell, Box, Button, Divider, Group, NavLink, Stack, Text, ThemeIcon } from '@mantine/core';
-import { IconBrandSteam, IconCloudDownload, IconDeviceGamepad2, IconExternalLink, IconHome, IconServerBolt } from '@tabler/icons-react';
+import { IconBrandSteam, IconCloudDownload, IconDeviceGamepad2, IconExternalLink, IconHome, IconServerBolt, IconSettings } from '@tabler/icons-react';
 import { NavLink as RouterNavLink } from 'react-router-dom';
 import { AppHeader } from '../components/AppHeader';
 
@@ -71,6 +71,19 @@ export function AuthenticatedLayout() {
                 label="Install"
                 leftSection={<IconCloudDownload size={18} />}
                 active={location.pathname.startsWith('/install')}
+                variant="filled"
+                color="cyan"
+                styles={{
+                  root: { borderRadius: 8 },
+                  label: { fontWeight: 700 },
+                }}
+              />
+              <NavLink
+                component={RouterNavLink}
+                to="/settings"
+                label="Settings"
+                leftSection={<IconSettings size={18} />}
+                active={location.pathname.startsWith('/settings')}
                 variant="filled"
                 color="cyan"
                 styles={{

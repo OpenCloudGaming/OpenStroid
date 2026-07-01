@@ -10,6 +10,7 @@ import { AuthenticatedLayout } from './layouts/AuthenticatedLayout';
 import { LoginPage } from './pages/LoginPage';
 import { LibraryPage } from './pages/LibraryPage';
 import { InstallPage } from './pages/InstallPage';
+import { SettingsPage } from './pages/SettingsPage';
 import { StreamPage } from './pages/StreamPage';
 
 export default function App() {
@@ -30,6 +31,7 @@ export default function App() {
             >
               <Route path="/library" element={<LibraryPage />} />
               <Route path="/install" element={<InstallPage />} />
+              <Route path="/settings" element={<SettingsPage />} />
             </Route>
             <Route path="*" element={<Navigate to="/library" replace />} />
           </Routes>

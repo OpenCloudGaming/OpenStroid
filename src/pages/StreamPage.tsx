@@ -38,6 +38,7 @@ import {
   type StreamQualityPreset,
 } from '../stream/OpenStroidStreamClient';
 import { dequeueStreamSession, logStreamSession } from '../api';
+import { readAppSettings, SETTINGS_KEYS } from '../lib/userSettings';
 import type { StreamLaunchResponse, StreamRealtimeStats } from '../types';
 
 const FALLBACK_CURSOR_IMAGE =
@@ -46,11 +47,6 @@ const FALLBACK_CURSOR_IMAGE =
     '<svg xmlns="http://www.w3.org/2000/svg" width="28" height="36" viewBox="0 0 28 36"><path d="M4 3v25.5l6.9-6.2 4.1 9.7 4.5-1.9-4.1-9.5h9.8L4 3Z" fill="white" stroke="black" stroke-width="2" stroke-linejoin="round"/></svg>',
   );
 
-const VOLUME_STORAGE_KEY = 'stream_audio_volume';
-const BITRATE_STORAGE_KEY = 'bitrateValue';
-const FPS_STORAGE_KEY = 'fpsRateValue';
-const STATS_STORAGE_KEY = 'stream_stats_visible';
-
 function readFallbackLaunch(): StreamLaunchResponse | null {
   try {
     const raw = window.sessionStorage.getItem('openstroid:lastLaunch');
@@ -58,19 +54,6 @@ function readFallbackLaunch(): StreamLaunchResponse | null {
   } catch {
     return null;
   }
-}
-
-function readNumber(key: string, fallback: number, min: number, max: number) {
-  const raw = typeof window !== 'undefined' ? window.localStorage.getItem(key) : null;
-  const value = Number(raw);
-  if (!Number.isFinite(value)) return fallback;
-  return Math.min(Math.max(value, min), max);
-}
-
-function readBool(key: string, fallback: boolean) {
-  const raw = typeof window !== 'undefined' ? window.localStorage.getItem(key) : null;
-  if (raw === null) return fallback;
-  return raw === '1' || raw === 'true';
 }
 
 function statusColor(status: string) {
@@ -85,6 +68,7 @@ function mbps(value: number) {
 }
 
 export function StreamPage() {
+  const initialAppSettings = useMemo(() => readAppSettings(), []);
   const navigate = useNavigate();
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
@@ -96,15 +80,15 @@ export function StreamPage() {
   const [videoBox, setVideoBox] = useState({ left: 0, top: 0, width: 0, height: 0 });
   const [mouseMode, setMouseMode] = useState<StreamMouseMode>('absolute');
   const [stats, setStats] = useState<StreamRealtimeStats | null>(null);
-  const [statsVisible, setStatsVisible] = useState(() => readBool(STATS_STORAGE_KEY, true));
+  const [statsVisible, setStatsVisible] = useState(() => initialAppSettings.stream.statsVisible);
   const [settingsOpened, setSettingsOpened] = useState(false);
-  const [volume, setVolume] = useState(() => readNumber(VOLUME_STORAGE_KEY, 70, 0, 100));
-  const [muted, setMuted] = useState(false);
-  const [maxBitrate, setMaxBitrate] = useState(() => readNumber(BITRATE_STORAGE_KEY, 20, 3, 40));
-  const [maxFps, setMaxFps] = useState(() => readNumber(FPS_STORAGE_KEY, 60, 60, 120));
-  const [quality, setQuality] = useState<StreamQualityPreset>('auto');
-  const [fsrEnabled, setFsrEnabled] = useState(false);
-  const [micEnabled, setMicEnabled] = useState(false);
+  const [volume, setVolume] = useState(() => initialAppSettings.stream.volume);
+  const [muted, setMuted] = useState(() => initialAppSettings.stream.muted);
+  const [maxBitrate, setMaxBitrate] = useState(() => initialAppSettings.stream.maxBitrate);
+  const [maxFps, setMaxFps] = useState(() => initialAppSettings.stream.maxFps);
+  const [quality, setQuality] = useState<StreamQualityPreset>(() => initialAppSettings.stream.quality);
+  const [fsrEnabled, setFsrEnabled] = useState(() => initialAppSettings.stream.fsrEnabled);
+  const [micEnabled, setMicEnabled] = useState(() => initialAppSettings.stream.micEnabled);
   const initialSettingsRef = useRef({
     volume,
     muted,
@@ -220,10 +204,11 @@ export function StreamPage() {
 
   const updateVolume = useCallback((value: number) => {
     setVolume(value);
-    window.localStorage.setItem(VOLUME_STORAGE_KEY, String(value));
+    window.localStorage.setItem(SETTINGS_KEYS.streamVolume, String(value));
     clientRef.current?.setAudioVolume(value);
     if (value > 0) {
       setMuted(false);
+      window.localStorage.setItem(SETTINGS_KEYS.streamMuted, 'false');
       clientRef.current?.setMuted(false);
     }
   }, []);
@@ -231,6 +216,7 @@ export function StreamPage() {
   const toggleMute = useCallback(() => {
     setMuted((current) => {
       const next = !current;
+      window.localStorage.setItem(SETTINGS_KEYS.streamMuted, String(next));
       clientRef.current?.setMuted(next);
       return next;
     });
@@ -238,19 +224,20 @@ export function StreamPage() {
 
   const applyBitrate = useCallback((value: number) => {
     setMaxBitrate(value);
-    window.localStorage.setItem(BITRATE_STORAGE_KEY, String(value));
+    window.localStorage.setItem(SETTINGS_KEYS.streamBitrate, String(value));
     clientRef.current?.setMaxBitrateMbps(value);
   }, []);
 
   const applyFps = useCallback((value: number) => {
     const next = value >= 120 ? 120 : 60;
     setMaxFps(next);
-    window.localStorage.setItem(FPS_STORAGE_KEY, String(next));
+    window.localStorage.setItem(SETTINGS_KEYS.streamFps, String(next));
     clientRef.current?.setMaxFramerate(next);
   }, []);
 
   const applyQuality = useCallback((value: StreamQualityPreset) => {
     setQuality(value);
+    window.localStorage.setItem(SETTINGS_KEYS.streamQuality, value);
     clientRef.current?.setQuality(value);
     const presetBitrate = value === 'high' ? 24 : value === 'balanced' ? 14 : value === 'dataSaver' ? 7 : maxBitrate;
     if (value !== 'auto') applyBitrate(presetBitrate);
@@ -259,7 +246,7 @@ export function StreamPage() {
   const toggleStats = useCallback(() => {
     setStatsVisible((current) => {
       const next = !current;
-      window.localStorage.setItem(STATS_STORAGE_KEY, next ? '1' : '0');
+      window.localStorage.setItem(SETTINGS_KEYS.streamStats, String(next));
       return next;
     });
   }, []);
@@ -374,14 +361,17 @@ export function StreamPage() {
         onVolumeChange={updateVolume}
         onMutedChange={(value) => {
           setMuted(value);
+          window.localStorage.setItem(SETTINGS_KEYS.streamMuted, String(value));
           clientRef.current?.setMuted(value);
         }}
         onFsrChange={(value) => {
           setFsrEnabled(value);
+          window.localStorage.setItem(SETTINGS_KEYS.streamFsr, String(value));
           clientRef.current?.setFsrEnabled(value);
         }}
         onMicChange={(value) => {
           setMicEnabled(value);
+          window.localStorage.setItem(SETTINGS_KEYS.streamMic, String(value));
           clientRef.current?.setMicrophoneEnabled(value);
         }}
         onPaste={() => void handlePaste()}

@@ -56,7 +56,7 @@ import {
 type LoadState = 'idle' | 'loading' | 'success' | 'error';
 type FilterKey = 'all' | 'not-installed' | 'installed' | 'controller' | 'free';
 
-const PAGE_SIZE = 60;
+const PAGE_SIZE = 50;
 
 function errorMessage(err: unknown, fallback: string): string {
   return (err as { response?: { data?: { message?: string } } })?.response?.data?.message || fallback;
@@ -85,10 +85,9 @@ export function InstallPage() {
     setLoadState('loading');
     setError('');
     try {
-      const params = { page: 1, paginate: PAGE_SIZE, limit: PAGE_SIZE };
       const rawGames = searchText.trim()
-        ? await searchCatalogGames({ ...params, name: searchText.trim() })
-        : await getCatalogGames(params);
+        ? await searchCatalogGames({ name: searchText.trim() })
+        : await getCatalogGames({ page: 1, paginate: PAGE_SIZE });
       setGames(uniqueGames(rawGames.map(coerceGame)));
       await refreshInstalled();
       setLoadState('success');
