@@ -157,6 +157,8 @@ async function submitCapture(reason) {
     }
 
     const allCookies = await collectRelevantCookies();
+    const hasAuthCookiePair = allCookies.some((cookie) => cookie.name === 'access_token') &&
+      allCookies.some((cookie) => cookie.name === 'refresh_token');
     const sawRelevantAuthPayload = observedResponses.some((event) =>
       event.url && (event.url.includes('/api/v1/auth/login') || event.url.includes('/api/v1/auth/refresh-token')),
     );
@@ -166,13 +168,13 @@ async function submitCapture(reason) {
     );
     const sawFreshAuthCookieChange = reason.startsWith('cookie:');
 
-    if (!sawRelevantAuthPayload && !sawStorageTokenCandidate && !sawFreshAuthCookieChange) {
+    if (!sawRelevantAuthPayload && !sawStorageTokenCandidate && !sawFreshAuthCookieChange && !hasAuthCookiePair) {
       lastSubmissionResult = {
         ok: false,
         submittedAt: new Date().toISOString(),
         reason,
         id: data.id,
-        message: 'No fresh auth payload, storage token, or auth cookie change observed yet.',
+        message: 'No fresh auth payload, storage token, or auth cookie pair observed yet.',
       };
       return;
     }
