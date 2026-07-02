@@ -5,6 +5,11 @@ import path from 'node:path';
 import { serverConfig } from '../config.js';
 import { createSession, type BridgeSession } from './session.js';
 import { decrypt, encrypt, sha256 } from './crypto.js';
+import {
+  ANDROID_TV_ENTRYPOINT_COOKIE,
+  androidTvRequestHeaders,
+  appendAndroidTvEntrypointCookie,
+} from './androidTvIdentity.js';
 
 const upstreamClient = axios.create({
   baseURL: serverConfig.upstreamBaseUrl,
@@ -47,6 +52,7 @@ interface PersistedCookieAuthStore {
 const refreshRequests = new Map<string, Promise<UpstreamTokens>>();
 const COOKIE_AUTH_PREFIX = 'cookie-auth:';
 const cookieAuthSessions = new Map<string, CookieAuthSession>();
+type UpstreamAuthInput = string | BridgeSession;
 
 function isFreshCookieSession(session: CookieAuthSession): boolean {
   const authCookies = session.cookies.filter((cookie) => (
@@ -140,11 +146,36 @@ export function getCookieAuthCookies(value: string): CookieAuthCookie[] {
   return cookieAuthSessions.get(value.slice(COOKIE_AUTH_PREFIX.length))?.cookies ?? [];
 }
 
-function upstreamAuthHeaders(accessToken: string): Record<string, string> {
+function getAccessToken(auth: UpstreamAuthInput): string {
+  return typeof auth === 'string' ? auth : auth.accessToken;
+}
+
+function usesAndroidTVIdentity(auth: UpstreamAuthInput): boolean {
+  return typeof auth !== 'string' && Boolean(auth.usesAndroidTVIdentity);
+}
+
+function getAuthDataToken(auth: UpstreamAuthInput): string {
+  if (typeof auth === 'string') return '';
+  if (typeof auth.userData === 'string') return auth.userData;
+  if (!auth.userData || typeof auth.userData !== 'object') return '';
+
+  const record = auth.userData as Record<string, unknown>;
+  for (const key of ['boosteroid_auth', 'boosteroidAuth', 'authorization_data', 'authorizationData']) {
+    const value = record[key];
+    if (typeof value === 'string' && value) return value;
+  }
+
+  return '';
+}
+
+function upstreamAuthHeaders(auth: UpstreamAuthInput): Record<string, string> {
+  const accessToken = getAccessToken(auth);
   const cookieHeader = readCookieAuthToken(accessToken);
+  let headers: Record<string, string>;
+
   if (cookieHeader) {
     const cookies = getCookieAuthCookies(accessToken);
-    const headers: Record<string, string> = {
+    headers = {
       Cookie: cookieHeader,
       Origin: serverConfig.upstreamBaseUrl,
       Referer: `${serverConfig.upstreamBaseUrl}/`,
@@ -157,22 +188,35 @@ function upstreamAuthHeaders(accessToken: string): Record<string, string> {
     if (boosteroidAuthCookie?.value) {
       headers['Authorization-Data'] = boosteroidAuthCookie.value;
     }
-    return headers;
+  } else {
+    headers = { Authorization: normalizeAuthorizationValue(accessToken) };
   }
 
-  return { Authorization: normalizeAuthorizationValue(accessToken) };
+  if (usesAndroidTVIdentity(auth)) {
+    headers = {
+      ...androidTvRequestHeaders(),
+      ...headers,
+      Cookie: appendAndroidTvEntrypointCookie(headers.Cookie),
+    };
+    const authDataToken = getAuthDataToken(auth);
+    if (authDataToken) {
+      headers['Authorization-Data'] = authDataToken;
+    }
+  }
+
+  return headers;
 }
 
-async function upstreamGet<T>(accessToken: string, path: string): Promise<T> {
+async function upstreamGet<T>(auth: UpstreamAuthInput, path: string): Promise<T> {
   const { data } = await upstreamClient.get(path, {
-    headers: upstreamAuthHeaders(accessToken),
+    headers: upstreamAuthHeaders(auth),
   });
   return data as T;
 }
 
-async function upstreamPost<T>(accessToken: string, path: string, body: unknown = {}): Promise<T> {
+async function upstreamPost<T>(auth: UpstreamAuthInput, path: string, body: unknown = {}): Promise<T> {
   const { data } = await upstreamClient.post(path, body, {
-    headers: upstreamAuthHeaders(accessToken),
+    headers: upstreamAuthHeaders(auth),
   });
   return data as T;
 }
@@ -252,13 +296,13 @@ export async function loginUpstream(payload: Record<string, string | boolean>): 
   };
 }
 
-export async function getUpstreamUser(accessToken: string): Promise<Record<string, unknown>> {
-  const data = await upstreamGet<unknown>(accessToken, '/api/v1/user');
+export async function getUpstreamUser(auth: UpstreamAuthInput): Promise<Record<string, unknown>> {
+  const data = await upstreamGet<unknown>(auth, '/api/v1/user');
   return unwrapRecord(data);
 }
 
-export async function getInstalledGamesUpstream(accessToken: string): Promise<unknown[]> {
-  const data = await upstreamGet<unknown>(accessToken, '/api/v1/boostore/applications/installed');
+export async function getInstalledGamesUpstream(auth: UpstreamAuthInput): Promise<unknown[]> {
+  const data = await upstreamGet<unknown>(auth, '/api/v1/boostore/applications/installed');
 
   if (Array.isArray(data)) return data;
   if (data && typeof data === 'object' && Array.isArray((data as { data?: unknown[] }).data)) {
@@ -271,13 +315,13 @@ export async function getInstalledGamesUpstream(accessToken: string): Promise<un
   return [];
 }
 
-export async function getApplicationUpstream(accessToken: string, appId: number): Promise<Record<string, unknown>> {
-  const data = await upstreamGet<unknown>(accessToken, `/api/v1/boostore/applications/${appId}`);
+export async function getApplicationUpstream(auth: UpstreamAuthInput, appId: number): Promise<Record<string, unknown>> {
+  const data = await upstreamGet<unknown>(auth, `/api/v1/boostore/applications/${appId}`);
   return unwrapRecord(data);
 }
 
-export async function getStreamingGatewaysUpstream(accessToken: string): Promise<unknown[]> {
-  const data = await upstreamGet<unknown>(accessToken, '/api/v1/streaming/gateways');
+export async function getStreamingGatewaysUpstream(auth: UpstreamAuthInput): Promise<unknown[]> {
+  const data = await upstreamGet<unknown>(auth, '/api/v1/streaming/gateways');
   if (Array.isArray(data)) return data;
   if (data && typeof data === 'object' && Array.isArray((data as { data?: unknown[] }).data)) {
     return (data as { data: unknown[] }).data;
@@ -285,69 +329,80 @@ export async function getStreamingGatewaysUpstream(accessToken: string): Promise
   return [];
 }
 
-export async function getStreamingSessionDetailsUpstream(accessToken: string, sessionId: string): Promise<Record<string, unknown>> {
+export async function getStreamingSessionDetailsUpstream(auth: UpstreamAuthInput, sessionId: string): Promise<Record<string, unknown>> {
   const data = await upstreamPost<unknown>(
-    accessToken,
+    auth,
     `/api/v1/streaming/session/details?sessionId=${encodeURIComponent(sessionId)}`,
     null,
   );
   return unwrapRecord(data);
 }
 
-export async function enqueueStreamingSessionUpstream(accessToken: string, appId: number): Promise<Record<string, unknown>> {
-  const data = await upstreamPost<unknown>(accessToken, '/api/v2/streaming/session/enqueue', { appId });
+export async function enqueueStreamingSessionUpstream(auth: UpstreamAuthInput, appId: number): Promise<Record<string, unknown>> {
+  const data = await upstreamPost<unknown>(auth, '/api/v2/streaming/session/enqueue', { appId });
   return unwrapRecord(data);
 }
 
-export async function dequeueStreamingSessionUpstream(accessToken: string): Promise<Record<string, unknown>> {
-  const data = await upstreamPost<unknown>(accessToken, '/api/v2/streaming/session/dequeue', {});
+export async function dequeueStreamingSessionUpstream(auth: UpstreamAuthInput): Promise<Record<string, unknown>> {
+  const data = await upstreamPost<unknown>(auth, '/api/v2/streaming/session/dequeue', {});
   return unwrapRecord(data);
 }
 
-export async function getLastSessionUpstream(accessToken: string): Promise<Record<string, unknown>> {
-  const data = await upstreamGet<unknown>(accessToken, '/api/v1/streaming/user/last-session');
+export async function getLastSessionUpstream(auth: UpstreamAuthInput): Promise<Record<string, unknown>> {
+  const data = await upstreamGet<unknown>(auth, '/api/v1/streaming/user/last-session');
   return unwrapRecord(data);
 }
 
-export async function getLastSessionLiveUpstream(accessToken: string): Promise<Record<string, unknown>> {
-  const data = await upstreamGet<unknown>(accessToken, '/api/v1/streaming/user/last-session/live');
+export async function getLastSessionLiveUpstream(auth: UpstreamAuthInput): Promise<Record<string, unknown>> {
+  const data = await upstreamGet<unknown>(auth, '/api/v1/streaming/user/last-session/live');
   return unwrapRecord(data);
 }
 
-export async function getActiveSessionsUpstream(accessToken: string): Promise<Record<string, unknown>> {
-  const data = await upstreamGet<unknown>(accessToken, '/api/v1/streaming/user/active-sessions');
+export async function getActiveSessionsUpstream(auth: UpstreamAuthInput): Promise<Record<string, unknown>> {
+  const data = await upstreamGet<unknown>(auth, '/api/v1/streaming/user/active-sessions');
   return unwrapRecord(data);
 }
 
-export async function startStreamingSessionV1Upstream(accessToken: string, appId: number): Promise<Record<string, unknown>> {
-  const data = await upstreamPost<unknown>(accessToken, '/api/v1/streaming/session/start', { appId });
+export async function startStreamingSessionV1Upstream(auth: UpstreamAuthInput, appId: number): Promise<Record<string, unknown>> {
+  const data = await upstreamPost<unknown>(auth, '/api/v1/streaming/session/start', { appId });
   return unwrapRecord(data);
 }
 
-export async function startStreamingSessionV2Upstream(accessToken: string, appId: number, sessionToken: string): Promise<Record<string, unknown>> {
-  const data = await upstreamPost<unknown>(accessToken, '/api/v2/streaming/session/start', { appId, sessionToken });
+export async function startStreamingSessionV2Upstream(auth: UpstreamAuthInput, appId: number, sessionToken: string): Promise<Record<string, unknown>> {
+  const data = await upstreamPost<unknown>(auth, '/api/v2/streaming/session/start', { appId, sessionToken });
   return unwrapRecord(data);
 }
 
-export async function logoutUpstream(accessToken: string): Promise<void> {
+export async function logoutUpstream(auth: UpstreamAuthInput): Promise<void> {
   await upstreamClient.post(
     '/api/v2/auth/logout',
     {},
     {
-      headers: upstreamAuthHeaders(accessToken),
+      headers: upstreamAuthHeaders(auth),
     },
   );
 }
 
-async function refreshUpstream(refreshToken: string): Promise<UpstreamTokens> {
-  const { data } = await upstreamClient.post('/api/v1/auth/refresh-token', {
-    refresh_token: refreshToken,
-  });
+async function refreshUpstream(session: BridgeSession): Promise<UpstreamTokens> {
+  const { data } = await upstreamClient.post(
+    '/api/v1/auth/refresh-token',
+    {
+      refresh_token: session.refreshToken,
+    },
+    {
+      headers: session.usesAndroidTVIdentity
+        ? {
+            ...androidTvRequestHeaders(),
+            Cookie: ANDROID_TV_ENTRYPOINT_COOKIE,
+          }
+        : undefined,
+    },
+  );
   const envelope = unwrapRecord(data);
 
   return {
     access_token: String(envelope.access_token ?? ''),
-    refresh_token: String(envelope.refresh_token ?? refreshToken),
+    refresh_token: String(envelope.refresh_token ?? session.refreshToken),
     user_data: envelope.user_data,
   };
 }
@@ -357,7 +412,7 @@ async function refreshSession(session: BridgeSession): Promise<BridgeSession> {
   let request = refreshRequests.get(lockKey);
 
   if (!request) {
-    request = refreshUpstream(session.refreshToken).finally(() => {
+    request = refreshUpstream(session).finally(() => {
       refreshRequests.delete(lockKey);
     });
     refreshRequests.set(lockKey, request);
@@ -374,12 +429,12 @@ async function refreshSession(session: BridgeSession): Promise<BridgeSession> {
 
 export async function withRefresh<T>(
   session: BridgeSession,
-  operation: (accessToken: string) => Promise<T>,
+  operation: (session: BridgeSession) => Promise<T>,
 ): Promise<{ session: BridgeSession; result: T }> {
   try {
     return {
       session,
-      result: await operation(session.accessToken),
+      result: await operation(session),
     };
   } catch (error) {
     const isUnauthorized = error instanceof AxiosError ? error.response?.status === 401 : false;
@@ -389,7 +444,7 @@ export async function withRefresh<T>(
     }
 
     const refreshedSession = await refreshSession(session);
-    const result = await operation(refreshedSession.accessToken);
+    const result = await operation(refreshedSession);
     return { session: refreshedSession, result };
   }
 }

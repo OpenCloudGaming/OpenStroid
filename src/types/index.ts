@@ -21,6 +21,27 @@ export type LoginCaptureStatus =
 
 export type LoginCaptureMethod = 'extension' | 'browser';
 
+export type QRCodeLoginStatus =
+  | 'polling'
+  | 'succeeded'
+  | 'cancelled'
+  | 'timed_out';
+
+export interface QRCodeLoginSessionStatus {
+  id: string;
+  status: QRCodeLoginStatus;
+  startedAt: string;
+  updatedAt: string;
+  completedAt: string | null;
+  timeoutAt: string;
+  validationUrl: string;
+  qrCodeDataUrl: string;
+  errors: string[];
+  user: User | null;
+  sessionEstablished: boolean;
+  pollIntervalMs: number;
+}
+
 export interface LoginCaptureStartResponse {
   id: string;
   status: LoginCaptureStatus;

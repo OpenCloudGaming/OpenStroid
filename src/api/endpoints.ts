@@ -7,6 +7,7 @@ import type {
   LoginCaptureMethod,
   LoginCaptureSessionStatus,
   LoginCaptureStartResponse,
+  QRCodeLoginSessionStatus,
   StreamLaunchResponse,
   User,
 } from '../types';
@@ -21,6 +22,22 @@ function extractSession(data: Record<string, unknown>): AuthSession {
 export async function startLoginCapture(method: LoginCaptureMethod = 'extension'): Promise<LoginCaptureStartResponse> {
   const { data } = await apiClient.post(API_CONFIG.endpoints.loginStart, { method });
   return data as LoginCaptureStartResponse;
+}
+
+export async function startQRCodeLogin(): Promise<QRCodeLoginSessionStatus> {
+  const { data } = await apiClient.post(API_CONFIG.endpoints.qrLoginStart);
+  return data as QRCodeLoginSessionStatus;
+}
+
+export async function getQRCodeLoginStatus(id?: string): Promise<QRCodeLoginSessionStatus> {
+  const url = id ? `${API_CONFIG.endpoints.qrLoginStatus}/${id}` : API_CONFIG.endpoints.qrLoginStatus;
+  const { data } = await apiClient.get(url);
+  return data as QRCodeLoginSessionStatus;
+}
+
+export async function cancelQRCodeLogin(id?: string): Promise<QRCodeLoginSessionStatus> {
+  const { data } = await apiClient.post(API_CONFIG.endpoints.qrLoginCancel, id ? { id } : {});
+  return data as QRCodeLoginSessionStatus;
 }
 
 export async function getLoginCaptureStatus(id?: string): Promise<LoginCaptureSessionStatus> {

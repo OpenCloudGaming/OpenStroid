@@ -8,6 +8,7 @@ import {
   type CaptureMethod,
   type ExtensionPairingRequest,
 } from './lib/authCapture.js';
+import { qrCodeLoginManager, type QRCodeLoginArtifact } from './lib/qrLogin.js';
 import { clearSession, createSession, readSession, writeSession } from './lib/session.js';
 import {
   dequeueStreamingSessionUpstream,
@@ -348,10 +349,23 @@ export function createBridgeApp() {
     return getCookieAuthCookies(accessToken).find((cookie) => cookie.name === 'access_token')?.value ?? accessToken;
   }
 
-  function getStreamClientAuth(accessToken: string): { accessToken: string; authDataToken: string } {
-    const cookies = getCookieAuthCookies(accessToken);
-    const accessCookie = cookies.find((cookie) => cookie.name === 'access_token')?.value ?? accessToken;
-    const authDataToken = cookies.find((cookie) => cookie.name === 'boosteroid_auth')?.value ?? '';
+  function getSessionAuthDataToken(session: BridgeSession): string {
+    if (typeof session.userData === 'string') return session.userData;
+    if (!session.userData || typeof session.userData !== 'object') return '';
+
+    const record = session.userData as Record<string, unknown>;
+    for (const key of ['boosteroid_auth', 'boosteroidAuth', 'authorization_data', 'authorizationData']) {
+      const value = record[key];
+      if (typeof value === 'string' && value) return value;
+    }
+
+    return '';
+  }
+
+  function getStreamClientAuth(session: BridgeSession): { accessToken: string; authDataToken: string } {
+    const cookies = getCookieAuthCookies(session.accessToken);
+    const accessCookie = cookies.find((cookie) => cookie.name === 'access_token')?.value ?? session.accessToken;
+    const authDataToken = cookies.find((cookie) => cookie.name === 'boosteroid_auth')?.value ?? getSessionAuthDataToken(session);
     return {
       accessToken: normalizeAuthorizationForClient(accessCookie),
       authDataToken,
@@ -454,7 +468,7 @@ export function createBridgeApp() {
   }
 
   async function discoverSessionSignals(
-    accessToken: string,
+    session: BridgeSession,
     appId: number,
     seedPayload: Record<string, unknown>,
     realtimePayloads: Array<{ source: string; payload: Record<string, unknown> }> = [],
@@ -462,16 +476,16 @@ export function createBridgeApp() {
     const payloads = [
       { source: 'enqueue', payload: seedPayload },
       ...realtimePayloads,
-      await optionalPayload('last-session/live', () => getLastSessionLiveUpstream(accessToken)),
-      await optionalPayload('last-session', () => getLastSessionUpstream(accessToken)),
-      await optionalPayload('active-sessions', () => getActiveSessionsUpstream(accessToken)),
+      await optionalPayload('last-session/live', () => getLastSessionLiveUpstream(session)),
+      await optionalPayload('last-session', () => getLastSessionUpstream(session)),
+      await optionalPayload('active-sessions', () => getActiveSessionsUpstream(session)),
     ].filter((item): item is { source: string; payload: Record<string, unknown> } => Boolean(item));
 
     return collectSessionSignals(appId, payloads);
   }
 
   async function waitForStartableSession(
-    accessToken: string,
+    session: BridgeSession,
     appId: number,
     enqueuePayload: Record<string, unknown>,
     realtimePayloads: () => Array<{ source: string; payload: Record<string, unknown> }> = () => [],
@@ -482,7 +496,7 @@ export function createBridgeApp() {
     await delay(5_000);
 
     while (Date.now() < deadline) {
-      const signals = await discoverSessionSignals(accessToken, appId, enqueuePayload, realtimePayloads());
+      const signals = await discoverSessionSignals(session, appId, enqueuePayload, realtimePayloads());
       if (signals.sessionTokens.length > 0 || signals.sessionQueries.some((query) => getSessionIdFromQuery(query))) {
         return signals;
       }
@@ -495,13 +509,13 @@ export function createBridgeApp() {
     return bestSignals;
   }
 
-  async function waitForStreamingSessionDetails(accessToken: string, sessionId: string): Promise<Record<string, unknown> | null> {
+  async function waitForStreamingSessionDetails(session: BridgeSession, sessionId: string): Promise<Record<string, unknown> | null> {
     const deadline = Date.now() + 60_000;
     let latest: Record<string, unknown> | null = null;
 
     while (Date.now() < deadline) {
       try {
-        latest = await getStreamingSessionDetailsUpstream(accessToken, sessionId);
+        latest = await getStreamingSessionDetailsUpstream(session, sessionId);
         if (findNestedString(latest, ['queryString', 'query', 'sessionQuery'])) {
           return latest;
         }
@@ -546,7 +560,7 @@ export function createBridgeApp() {
 
   async function launchStreamingSession(session: BridgeSession, appId: number): Promise<StreamLaunchResult> {
     const accessToken = session.accessToken;
-    const appDetails = await getApplicationUpstream(accessToken, appId).catch(() => null);
+    const appDetails = await getApplicationUpstream(session, appId).catch(() => null);
     let gateways: unknown[] = [];
     let startPayload: Record<string, unknown> | null = null;
     let startUrl: string | null = null;
@@ -557,9 +571,9 @@ export function createBridgeApp() {
 
     try {
       await Promise.race([realtimeListener?.ready ?? Promise.resolve(), delay(3000)]);
-      const enqueuePayload = await enqueueStreamingSessionUpstream(accessToken, appId);
+      const enqueuePayload = await enqueueStreamingSessionUpstream(session, appId);
       const signals = await waitForStartableSession(
-        accessToken,
+        session,
         appId,
         enqueuePayload,
         () => realtimeListener?.payloads() ?? [],
@@ -573,21 +587,21 @@ export function createBridgeApp() {
 
       for (const sessionToken of signals.sessionTokens) {
         try {
-          startPayload = await startStreamingSessionV2Upstream(accessToken, appId, sessionToken);
+          startPayload = await startStreamingSessionV2Upstream(session, appId, sessionToken);
           break;
         } catch (error) {
           const errorCode = extractErrorCode(error);
           if (errorCode === 340005) {
-            await dequeueStreamingSessionUpstream(accessToken).catch(() => ({}));
-            const nextEnqueuePayload = await enqueueStreamingSessionUpstream(accessToken, appId);
+            await dequeueStreamingSessionUpstream(session).catch(() => ({}));
+            const nextEnqueuePayload = await enqueueStreamingSessionUpstream(session, appId);
             const nextSignals = await waitForStartableSession(
-              accessToken,
+              session,
               appId,
               nextEnqueuePayload,
               () => realtimeListener?.payloads() ?? [],
             );
             for (const nextToken of nextSignals.sessionTokens) {
-              startPayload = await startStreamingSessionV2Upstream(accessToken, appId, nextToken);
+              startPayload = await startStreamingSessionV2Upstream(session, appId, nextToken);
               break;
             }
           }
@@ -617,7 +631,7 @@ export function createBridgeApp() {
     }
 
     if (!startPayload && useV1Fallback) {
-      startPayload = await startStreamingSessionV1Upstream(accessToken, appId);
+      startPayload = await startStreamingSessionV1Upstream(session, appId);
     }
 
     if (!startPayload) {
@@ -641,10 +655,10 @@ export function createBridgeApp() {
 
     gateways = findNestedGateways(startPayload, ['gateways', 'gateway', 'gw']);
     if (gateways.length === 0) {
-      gateways = await getStreamingGatewaysUpstream(accessToken).catch(() => []);
+      gateways = await getStreamingGatewaysUpstream(session).catch(() => []);
     }
 
-    const sessionDetails = await waitForStreamingSessionDetails(accessToken, sessionId);
+    const sessionDetails = await waitForStreamingSessionDetails(session, sessionId);
     const detailsQuery = findNestedString(sessionDetails, ['queryString', 'query', 'sessionQuery']);
     const startQuery = findNestedString(startPayload, ['queryString', 'query', 'sessionQuery']);
     const detailsGateways = findNestedGateways(sessionDetails, ['gateways', 'gateway', 'gw']);
@@ -659,7 +673,7 @@ export function createBridgeApp() {
       gateways = detailsGateways;
     }
 
-    const streamAuth = getStreamClientAuth(accessToken);
+    const streamAuth = getStreamClientAuth(session);
 
     if (!sessionQueries.some((query) => query !== `?sessionId=${sessionId}`)) {
       const error = new Error('Boosteroid did not return a gateway stream query for the launched machine.');
@@ -761,6 +775,9 @@ export function createBridgeApp() {
         refreshToken: capture.bridgeSession.refreshToken,
         userData: capture.bridgeSession.userData,
         user: capture.bridgeSession.user,
+        sessionId: capture.bridgeSession.sessionId ?? null,
+        expiresAt: capture.bridgeSession.expiresAt ?? null,
+        usesAndroidTVIdentity: Boolean(capture.bridgeSession.usesAndroidTVIdentity),
         existing: existingSession ?? capture.bridgeSession,
       });
       writeSession(res, nextSession);
@@ -785,8 +802,91 @@ export function createBridgeApp() {
     });
   }
 
+  function serializeQRCodeStatus(
+    req: Request,
+    res: Response,
+    qrSession: QRCodeLoginArtifact,
+  ) {
+    let sessionEstablished = false;
+    if (qrSession.status === 'succeeded' && qrSession.bridgeSession) {
+      const existingSession = readSession(req);
+      const nextSession = createSession({
+        accessToken: qrSession.bridgeSession.accessToken,
+        refreshToken: qrSession.bridgeSession.refreshToken,
+        userData: qrSession.bridgeSession.userData,
+        user: qrSession.bridgeSession.user,
+        sessionId: qrSession.bridgeSession.sessionId,
+        expiresAt: qrSession.bridgeSession.expiresAt,
+        usesAndroidTVIdentity: qrSession.bridgeSession.usesAndroidTVIdentity,
+        existing: existingSession ?? qrSession.bridgeSession,
+      });
+      writeSession(res, nextSession);
+      sessionEstablished = true;
+    }
+
+    res.json({
+      id: qrSession.id,
+      status: qrSession.status,
+      startedAt: qrSession.startedAt,
+      updatedAt: qrSession.updatedAt,
+      completedAt: qrSession.completedAt,
+      timeoutAt: qrSession.timeoutAt,
+      validationUrl: qrSession.validationUrl,
+      qrCodeDataUrl: qrSession.qrCodeDataUrl,
+      errors: qrSession.errors,
+      user: qrSession.userPayload,
+      sessionEstablished,
+      pollIntervalMs: qrSession.pollIntervalMs,
+    });
+  }
+
+  function sendQRCodeStatus(req: Request, res: Response, qrSessionId?: string) {
+    const qrSession = qrCodeLoginManager.getStatus(qrSessionId);
+    if (!qrSession) {
+      res.status(404).json({ message: 'No QR login session found.' });
+      return;
+    }
+
+    serializeQRCodeStatus(req, res, qrSession);
+  }
+
   app.get('/health', (_req, res) => {
     res.json({ ok: true, desktopBridge: true });
+  });
+
+  app.post('/auth/login/qr/start', async (req, res, next) => {
+    try {
+      const qrSession = await qrCodeLoginManager.start();
+      clearSession(res);
+      res.status(202);
+      serializeQRCodeStatus(req, res, qrSession);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.get('/auth/login/qr/status', (req, res) => {
+    sendQRCodeStatus(req, res);
+  });
+
+  app.get('/auth/login/qr/status/:id', (req, res) => {
+    sendQRCodeStatus(req, res, req.params.id);
+  });
+
+  app.post('/auth/login/qr/cancel', async (req, res, next) => {
+    try {
+      const qrSessionId = typeof req.body?.id === 'string' ? req.body.id : undefined;
+      const qrSession = await qrCodeLoginManager.cancel(qrSessionId);
+      if (!qrSession) {
+        res.status(404).json({ message: 'No active QR login session found.' });
+        return;
+      }
+
+      clearSession(res);
+      serializeQRCodeStatus(req, res, qrSession);
+    } catch (error) {
+      next(error);
+    }
   });
 
   app.post('/auth/login/start', async (req, res, next) => {
@@ -876,7 +976,7 @@ export function createBridgeApp() {
 
     if (session) {
       try {
-        await logoutUpstream(session.accessToken);
+        await logoutUpstream(session);
       } catch {
         res.status(204).end();
         return;
