@@ -1,3 +1,6 @@
+export const MIN_STREAM_BITRATE_MBPS = 3;
+export const MAX_STREAM_BITRATE_MBPS = 150;
+
 export type StreamQualityPreset = 'auto' | 'high' | 'balanced' | 'dataSaver';
 export type StreamResolutionPreset = 'auto' | '720p' | '1080p' | '1440p' | '2160p';
 export type StreamEncodingPreset = 'auto' | 'h264' | 'av1';

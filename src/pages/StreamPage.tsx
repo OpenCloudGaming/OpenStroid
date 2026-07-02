@@ -22,21 +22,17 @@ import {
   IconMaximize,
   IconMicrophone,
   IconMicrophoneOff,
-  IconMouse,
   IconPlayerStop,
-  IconPointer,
   IconRefresh,
   IconSettings,
   IconVolume,
   IconVolumeOff,
 } from '@tabler/icons-react';
 import { useNavigate } from 'react-router-dom';
+import { OpenStroidStreamClient } from '../stream/OpenStroidStreamClient';
 import {
-  OpenStroidStreamClient,
-  type StreamCursorState,
-  type StreamMouseMode,
-} from '../stream/OpenStroidStreamClient';
-import {
+  MAX_STREAM_BITRATE_MBPS,
+  MIN_STREAM_BITRATE_MBPS,
   STREAM_ENCODING_OPTIONS,
   STREAM_QUALITY_OPTIONS,
   STREAM_RESOLUTION_OPTIONS,
@@ -47,12 +43,6 @@ import {
 import { dequeueStreamSession, logStreamSession } from '../api';
 import { readAppSettings, SETTINGS_KEYS } from '../lib/userSettings';
 import type { StreamLaunchResponse, StreamRealtimeStats } from '../types';
-
-const FALLBACK_CURSOR_IMAGE =
-  'data:image/svg+xml;base64,' +
-  btoa(
-    '<svg xmlns="http://www.w3.org/2000/svg" width="28" height="36" viewBox="0 0 28 36"><path d="M4 3v25.5l6.9-6.2 4.1 9.7 4.5-1.9-4.1-9.5h9.8L4 3Z" fill="white" stroke="black" stroke-width="2" stroke-linejoin="round"/></svg>',
-  );
 
 function readFallbackLaunch(): StreamLaunchResponse | null {
   try {
@@ -83,9 +73,6 @@ export function StreamPage() {
   const [status, setStatus] = useState('Preparing');
   const [logs, setLogs] = useState<string[]>([]);
   const [launch, setLaunch] = useState<StreamLaunchResponse | null | undefined>(undefined);
-  const [cursor, setCursor] = useState<StreamCursorState>({ x: 0.5, y: 0.5, visible: false, imageUrl: null });
-  const [videoBox, setVideoBox] = useState({ left: 0, top: 0, width: 0, height: 0 });
-  const [mouseMode, setMouseMode] = useState<StreamMouseMode>('absolute');
   const [stats, setStats] = useState<StreamRealtimeStats | null>(null);
   const [statsVisible, setStatsVisible] = useState(() => initialAppSettings.stream.statsVisible);
   const [settingsOpened, setSettingsOpened] = useState(false);
@@ -150,8 +137,6 @@ export function StreamPage() {
         setStatus(nextStatus);
       },
       onLog: appendLog,
-      onCursor: setCursor,
-      onMouseMode: setMouseMode,
       onStats: setStats,
     });
     const initialSettings = initialSettingsRef.current;
@@ -177,43 +162,6 @@ export function StreamPage() {
       clientRef.current = null;
     };
   }, [appendLog, launch]);
-
-  useEffect(() => {
-    function updateVideoBox() {
-      const video = videoRef.current;
-      if (!video) return;
-      const rect = video.getBoundingClientRect();
-      const videoWidth = video.videoWidth || 16;
-      const videoHeight = video.videoHeight || 9;
-      const frameRatio = rect.width / Math.max(rect.height, 1);
-      const videoRatio = videoWidth / Math.max(videoHeight, 1);
-
-      if (videoRatio > frameRatio) {
-        const height = rect.width / videoRatio;
-        setVideoBox({ left: rect.left, top: rect.top + (rect.height - height) / 2, width: rect.width, height });
-        return;
-      }
-
-      const width = rect.height * videoRatio;
-      setVideoBox({ left: rect.left + (rect.width - width) / 2, top: rect.top, width, height: rect.height });
-    }
-
-    updateVideoBox();
-    window.addEventListener('resize', updateVideoBox);
-    window.addEventListener('fullscreenchange', updateVideoBox);
-    return () => {
-      window.removeEventListener('resize', updateVideoBox);
-      window.removeEventListener('fullscreenchange', updateVideoBox);
-    };
-  }, [launch]);
-
-  const cursorPosition = useMemo(
-    () => ({
-      left: videoBox.left + Math.min(Math.max(cursor.x, 0), 1) * videoBox.width,
-      top: videoBox.top + Math.min(Math.max(cursor.y, 0), 1) * videoBox.height,
-    }),
-    [cursor.x, cursor.y, videoBox],
-  );
 
   const updateVolume = useCallback((value: number) => {
     setVolume(value);
@@ -252,9 +200,7 @@ export function StreamPage() {
     setQuality(value);
     window.localStorage.setItem(SETTINGS_KEYS.streamQuality, value);
     clientRef.current?.setQuality(value);
-    const presetBitrate = value === 'high' ? 24 : value === 'balanced' ? 14 : value === 'dataSaver' ? 7 : maxBitrate;
-    if (value !== 'auto') applyBitrate(presetBitrate);
-  }, [applyBitrate, maxBitrate]);
+  }, []);
 
   const applyResolution = useCallback((value: StreamResolutionPreset) => {
     setResolution(value);
@@ -307,18 +253,6 @@ export function StreamPage() {
         playsInline
         controls={false}
         muted
-        onLoadedMetadata={(event) => {
-          const rect = event.currentTarget.getBoundingClientRect();
-          const videoRatio = event.currentTarget.videoWidth / Math.max(event.currentTarget.videoHeight, 1);
-          const frameRatio = rect.width / Math.max(rect.height, 1);
-          if (videoRatio > frameRatio) {
-            const height = rect.width / videoRatio;
-            setVideoBox({ left: rect.left, top: rect.top + (rect.height - height) / 2, width: rect.width, height });
-          } else {
-            const width = rect.height * videoRatio;
-            setVideoBox({ left: rect.left + (rect.width - width) / 2, top: rect.top, width, height: rect.height });
-          }
-        }}
         style={{
           width: '100vw',
           height: '100vh',
@@ -326,29 +260,9 @@ export function StreamPage() {
           background: '#000',
           display: 'block',
           outline: 'none',
-          cursor: 'none',
         }}
       />
       <audio ref={audioRef} autoPlay />
-
-      <Box
-        style={{
-          position: 'fixed',
-          left: cursorPosition.left,
-          top: cursorPosition.top,
-          width: 34,
-          height: 42,
-          pointerEvents: 'none',
-          zIndex: 8,
-          opacity: cursor.visible ? 1 : 0,
-          filter: 'drop-shadow(0 1px 2px rgba(0,0,0,0.75))',
-        }}
-      >
-        <img src={FALLBACK_CURSOR_IMAGE} alt="" draggable={false} style={{ position: 'absolute', left: 0, top: 0, width: 28, height: 36, objectFit: 'contain' }} />
-        {cursor.imageUrl && (
-          <img src={cursor.imageUrl} alt="" draggable={false} style={{ position: 'absolute', left: 0, top: 0, width: 34, height: 42, objectFit: 'contain' }} />
-        )}
-      </Box>
 
       <TopStatus status={status} title={title} />
 
@@ -360,10 +274,8 @@ export function StreamPage() {
         status={status}
         statsVisible={statsVisible}
         muted={muted || volume === 0}
-        mouseMode={mouseMode}
         onToggleStats={toggleStats}
         onToggleMute={toggleMute}
-        onToggleMouseMode={() => void clientRef.current?.toggleMouseMode()}
         onOpenSettings={() => setSettingsOpened(true)}
         onReconnect={() => void handleReconnect()}
         onFullscreen={() => document.documentElement.requestFullscreen().catch(() => undefined)}
@@ -488,10 +400,8 @@ function LogPanel({ launch, logs }: { launch: StreamLaunchResponse | null | unde
 function ControlBar({
   statsVisible,
   muted,
-  mouseMode,
   onToggleStats,
   onToggleMute,
-  onToggleMouseMode,
   onOpenSettings,
   onReconnect,
   onFullscreen,
@@ -500,10 +410,8 @@ function ControlBar({
   status: string;
   statsVisible: boolean;
   muted: boolean;
-  mouseMode: StreamMouseMode;
   onToggleStats: () => void;
   onToggleMute: () => void;
-  onToggleMouseMode: () => void;
   onOpenSettings: () => void;
   onReconnect: () => void;
   onFullscreen: () => void;
@@ -533,11 +441,6 @@ function ControlBar({
         <Tooltip label={muted ? 'Unmute' : 'Mute'}>
           <ActionIcon variant="subtle" color={muted ? 'red' : 'gray'} size="lg" onClick={onToggleMute}>
             {muted ? <IconVolumeOff size={18} /> : <IconVolume size={18} />}
-          </ActionIcon>
-        </Tooltip>
-        <Tooltip label={mouseMode === 'relative' ? 'Relative mouse' : 'Absolute mouse'}>
-          <ActionIcon variant="subtle" color={mouseMode === 'relative' ? 'cyan' : 'gray'} size="lg" onClick={onToggleMouseMode}>
-            {mouseMode === 'relative' ? <IconMouse size={18} /> : <IconPointer size={18} />}
           </ActionIcon>
         </Tooltip>
         <Divider orientation="vertical" />
@@ -648,7 +551,7 @@ function SettingsDrawer({
             <Text size="sm" fw={800}>Max bitrate</Text>
             <Text size="sm" c="dimmed">{maxBitrate} Mbps</Text>
           </Group>
-          <Slider min={3} max={40} step={1} value={maxBitrate} onChange={onBitrateChange} marks={[{ value: 7, label: '7' }, { value: 20, label: '20' }, { value: 40, label: '40' }]} />
+          <Slider min={MIN_STREAM_BITRATE_MBPS} max={MAX_STREAM_BITRATE_MBPS} step={1} value={maxBitrate} onChange={onBitrateChange} marks={[{ value: 7, label: '7' }, { value: 20, label: '20' }, { value: 50, label: '50' }, { value: MAX_STREAM_BITRATE_MBPS, label: String(MAX_STREAM_BITRATE_MBPS) }]} />
         </Stack>
         <Stack gap="xs">
           <Group justify="space-between">

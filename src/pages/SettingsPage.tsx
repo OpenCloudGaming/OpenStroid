@@ -28,6 +28,8 @@ import {
   type StreamDefaults,
 } from '../lib/userSettings';
 import {
+  MAX_STREAM_BITRATE_MBPS,
+  MIN_STREAM_BITRATE_MBPS,
   STREAM_ENCODING_OPTIONS,
   STREAM_QUALITY_OPTIONS,
   STREAM_RESOLUTION_OPTIONS,
@@ -354,8 +356,8 @@ export function SettingsPage({ onClose }: SettingsPageProps) {
                         type="range"
                         name="maxBitrate"
                         className="settings-slider"
-                        min={3}
-                        max={40}
+                        min={MIN_STREAM_BITRATE_MBPS}
+                        max={MAX_STREAM_BITRATE_MBPS}
                         step={1}
                         value={settings.stream.maxBitrate}
                         aria-label="Max bitrate"

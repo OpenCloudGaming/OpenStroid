@@ -2,6 +2,7 @@ import {
   isStreamEncodingPreset,
   isStreamQualityPreset,
   isStreamResolutionPreset,
+  MIN_STREAM_BITRATE_MBPS,
   type StreamEncodingPreset,
   type StreamQualityPreset,
   type StreamResolutionPreset,
@@ -60,10 +61,11 @@ function readString(key: string, fallback: string): string {
   return raw && raw.trim() ? raw.trim() : fallback;
 }
 
-function readNumber(key: string, fallback: number, min: number, max: number): number {
+function readNumber(key: string, fallback: number, min: number, max?: number): number {
   const value = Number(window.localStorage.getItem(key));
   if (!Number.isFinite(value)) return fallback;
-  return Math.min(Math.max(value, min), max);
+  const clamped = Math.max(value, min);
+  return max === undefined ? clamped : Math.min(clamped, max);
 }
 
 function readBool(key: string, fallback: boolean): boolean {
@@ -93,7 +95,7 @@ export function readAppSettings(): AppSettings {
     stream: {
       volume: readNumber(SETTINGS_KEYS.streamVolume, DEFAULT_SETTINGS.stream.volume, 0, 100),
       muted: readBool(SETTINGS_KEYS.streamMuted, DEFAULT_SETTINGS.stream.muted),
-      maxBitrate: readNumber(SETTINGS_KEYS.streamBitrate, DEFAULT_SETTINGS.stream.maxBitrate, 3, 40),
+      maxBitrate: readNumber(SETTINGS_KEYS.streamBitrate, DEFAULT_SETTINGS.stream.maxBitrate, MIN_STREAM_BITRATE_MBPS),
       maxFps: readNumber(SETTINGS_KEYS.streamFps, DEFAULT_SETTINGS.stream.maxFps, 60, 120),
       quality: readQuality(),
       resolution: readResolution(),
