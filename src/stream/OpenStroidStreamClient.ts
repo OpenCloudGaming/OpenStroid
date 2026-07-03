@@ -1,4 +1,5 @@
 import type { StreamClientConfig, StreamRealtimeStats } from '../types';
+import { GamepadController } from './GamepadController';
 import {
   MIN_STREAM_BITRATE_MBPS,
   resolutionForPreset,
@@ -44,6 +45,7 @@ export interface StreamCursorState {
 type CursorHandler = (cursor: StreamCursorState) => void;
 type MouseModeHandler = (mode: StreamMouseMode) => void;
 type StatsHandler = (stats: StreamRealtimeStats) => void;
+type ControllerCountHandler = (count: number) => void;
 
 interface StreamClientOptions {
   videoElement: HTMLVideoElement;
@@ -53,6 +55,7 @@ interface StreamClientOptions {
   onCursor?: CursorHandler;
   onMouseMode?: MouseModeHandler;
   onStats?: StatsHandler;
+  onControllerCount?: ControllerCountHandler;
 }
 
 interface StreamRuntimeSettings {
@@ -413,6 +416,7 @@ export class OpenStroidStreamClient {
   private readonly onCursor: CursorHandler;
   private readonly onMouseMode: MouseModeHandler;
   private readonly onStats: StatsHandler;
+  private readonly onControllerCount: ControllerCountHandler;
   private ws: WebSocket | null = null;
   private pc: RTCPeerConnection | null = null;
   private dataChannel: RTCDataChannel | null = null;
@@ -456,6 +460,7 @@ export class OpenStroidStreamClient {
   private lastCursorIconName: string | null = null;
   private baseInputInstalled = false;
   private mouseInputInstalled = false;
+  private gamepadController: GamepadController | null = null;
 
   private cursor: StreamCursorState = { x: 0.5, y: 0.5, visible: false, imageUrl: null };
   private pressedKeys = new Set<number>();
@@ -489,6 +494,7 @@ export class OpenStroidStreamClient {
     this.onCursor = options.onCursor ?? (() => undefined);
     this.onMouseMode = options.onMouseMode ?? (() => undefined);
     this.onStats = options.onStats ?? (() => undefined);
+    this.onControllerCount = options.onControllerCount ?? (() => undefined);
   }
 
   setAudioVolume(volume: number) {
@@ -759,6 +765,11 @@ export class OpenStroidStreamClient {
 
     if (message.type === 'mouse' || message.type === 'keyboard') {
       // Input echoes are only used for RTT measurement by the official client.
+      return;
+    }
+
+    if (message.type === 'controller') {
+      this.gamepadController?.handleServerMessage(message);
       return;
     }
 
@@ -1063,11 +1074,30 @@ export class OpenStroidStreamClient {
     document.addEventListener('pointerlockerror', this.handlePointerLockError);
 
     this.sendInputEvent({ type: 'keyboard', action: 'connected' });
+    this.startGamepadInput();
+  }
+
+  private startGamepadInput() {
+    this.stopGamepadInput();
+    this.gamepadController = new GamepadController({
+      sendEvent: (data) => this.sendRttEvent(data),
+      detectPlatform: detectPlatformCode,
+      onActiveCountChange: (count) => this.onControllerCount(count),
+      onRelease: () => this.fullInputRelease('controller combo'),
+    });
+    this.gamepadController.start();
+  }
+
+  private stopGamepadInput() {
+    this.gamepadController?.stop();
+    this.gamepadController = null;
+    this.onControllerCount(0);
   }
 
   private uninstallBaseInputHandlers() {
     if (!this.baseInputInstalled) return;
     this.baseInputInstalled = false;
+    this.stopGamepadInput();
     const target = this.videoElement;
     target.removeEventListener('click', this.handleVideoClick);
     target.removeEventListener('loadedmetadata', this.invalidateVideoSurfaceMetrics);

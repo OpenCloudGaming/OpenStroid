@@ -25,6 +25,7 @@ import {
   IconPlayerStop,
   IconRefresh,
   IconSettings,
+  IconDeviceGamepad2,
   IconVolume,
   IconVolumeOff,
 } from '@tabler/icons-react';
@@ -85,6 +86,7 @@ export function StreamPage() {
   const [encoding, setEncoding] = useState<StreamEncodingPreset>(() => initialAppSettings.stream.encoding);
   const [fsrEnabled, setFsrEnabled] = useState(() => initialAppSettings.stream.fsrEnabled);
   const [micEnabled, setMicEnabled] = useState(() => initialAppSettings.stream.micEnabled);
+  const [controllerCount, setControllerCount] = useState(0);
   const initialSettingsRef = useRef({
     volume,
     muted,
@@ -138,6 +140,7 @@ export function StreamPage() {
       },
       onLog: appendLog,
       onStats: setStats,
+      onControllerCount: setControllerCount,
     });
     const initialSettings = initialSettingsRef.current;
     client.setAudioVolume(initialSettings.volume);
@@ -264,7 +267,7 @@ export function StreamPage() {
       />
       <audio ref={audioRef} autoPlay />
 
-      <TopStatus status={status} title={title} />
+      <TopStatus status={status} title={title} controllerCount={controllerCount} />
 
       {statsVisible && <StatsPanel stats={stats} maxBitrate={maxBitrate} />}
 
@@ -321,12 +324,25 @@ export function StreamPage() {
   );
 }
 
-function TopStatus({ status, title }: { status: string; title: string }) {
+function TopStatus({
+  status,
+  title,
+  controllerCount,
+}: {
+  status: string;
+  title: string;
+  controllerCount: number;
+}) {
   return (
     <Group justify="space-between" align="center" style={{ position: 'fixed', top: 12, left: 12, right: 12, pointerEvents: 'none', zIndex: 10 }}>
       <Paper bg="rgba(7, 9, 13, 0.72)" p="sm" radius="md" style={{ border: '1px solid rgba(255,255,255,0.1)', backdropFilter: 'blur(12px)' }}>
         <Group gap="sm" wrap="nowrap">
           <Badge color={statusColor(status)} variant="filled">{status}</Badge>
+          {controllerCount > 0 && (
+            <Badge color="grape" variant="light" leftSection={<IconDeviceGamepad2 size={12} />}>
+              {controllerCount === 1 ? 'Controller connected' : `${controllerCount} controllers`}
+            </Badge>
+          )}
           <Text fw={800} size="sm" lineClamp={1}>{title}</Text>
         </Group>
       </Paper>

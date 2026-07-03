@@ -248,6 +248,56 @@ export interface StreamRealtimeStats {
   at: number;
 }
 
+export interface ControllerConnectedEvent {
+  type: 'controller';
+  action: 'connected';
+  name: string;
+}
+
+export interface ControllerDisconnectedEvent {
+  type: 'controller';
+  action: 'disconnected';
+  id: number;
+}
+
+export interface ControllerButtonEvent {
+  type: 'controller';
+  action: 'button';
+  id: number;
+  button: number;
+  value: number;
+}
+
+export interface ControllerAxesEvent {
+  type: 'controller';
+  action: 'axes';
+  id: number;
+  axes: number;
+  value: number;
+}
+
+export interface ControllerPadEvent {
+  type: 'controller';
+  action: 'pad';
+  id: number;
+  hat: number;
+}
+
+export interface ControllerRumbleMessage {
+  type: 'controller';
+  action: 'rumble';
+  id: number;
+  left: number;
+  right: number;
+}
+
+export type ControllerOutboundEvent =
+  | ControllerConnectedEvent
+  | ControllerDisconnectedEvent
+  | ControllerButtonEvent
+  | ControllerAxesEvent
+  | ControllerPadEvent;
+
 export interface ApiError {
   message?: string;
   error_code?: number;
