@@ -133,3 +133,23 @@ export function sortGames(games: InstalledGame[], sort: SortKey): InstalledGame[
     return a.name.localeCompare(b.name);
   });
 }
+
+export function describeLaunchError(err: unknown, gameName: string): string {
+  const response = err && typeof err === 'object' && 'response' in err
+    ? (err as { response?: { status?: number; data?: { message?: string } } }).response
+    : undefined;
+
+  if (response?.status === 429) {
+    return 'Boosteroid is rate-limiting new streams. Wait a minute, then try again.';
+  }
+
+  if (typeof response?.data?.message === 'string' && response.data.message.trim()) {
+    return response.data.message;
+  }
+
+  if (err instanceof Error && err.message.trim()) {
+    return err.message;
+  }
+
+  return `Failed to launch ${gameName}.`;
+}

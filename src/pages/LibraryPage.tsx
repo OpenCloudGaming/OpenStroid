@@ -42,6 +42,7 @@ import {
   synchronizePlatform,
 } from '../api';
 import type { InstalledGame, LibraryDashboard } from '../types';
+import { describeLaunchError } from '../lib/gameUtils';
 
 type LoadState = 'loading' | 'success' | 'error';
 type FilterKey = 'all' | 'installed' | 'controller' | 'free' | 'recent';
@@ -267,10 +268,7 @@ export function MyGamesPage() {
         window.location.assign('/stream');
       }
     } catch (err: unknown) {
-      const msg =
-        (err as { response?: { data?: { message?: string } } })?.response?.data?.message ||
-        `Failed to launch ${game.name}.`;
-      setLaunchError(msg);
+      setLaunchError(describeLaunchError(err, game.name));
     } finally {
       setLaunchingGameId(null);
       setLaunchingGameName('');

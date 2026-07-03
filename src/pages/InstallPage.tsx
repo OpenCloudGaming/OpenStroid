@@ -43,6 +43,7 @@ import {
 import type { InstalledGame } from '../types';
 import {
   coerceGame,
+  describeLaunchError,
   imageUrl,
   isControllerFriendly,
   isFree,
@@ -221,7 +222,7 @@ export function InstallPage({
         window.location.assign('/stream');
       }
     } catch (err) {
-      setActionMessage(errorMessage(err, `Could not launch ${game.name}.`));
+      setActionMessage(describeLaunchError(err, game.name));
     } finally {
       setActionGameId(null);
     }

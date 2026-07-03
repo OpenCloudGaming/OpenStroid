@@ -84,9 +84,7 @@ function attachWindowLogging(window: BrowserWindow, label: string) {
 
 function rendererUrlForPath(routePath: string): string {
   const normalizedPath = routePath.startsWith('/') ? routePath : `/${routePath}`;
-  return app.isPackaged
-    ? `http://127.0.0.1:${bridgePort}${normalizedPath}`
-    : `${DEV_RENDERER_URL}${normalizedPath}`;
+  return `http://127.0.0.1:${bridgePort}${normalizedPath}`;
 }
 
 function registerIpcHandlers() {
