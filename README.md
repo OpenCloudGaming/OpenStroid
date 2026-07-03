@@ -53,7 +53,7 @@ OpenStroid is a desktop app for Boosteroid with QR login, your game library, and
 
 ## Downloads
 
-Download the latest build from [GitHub Releases](https://github.com/OpenCloudGaming/OpenStroid/releases).
+Download the latest desktop build from [GitHub Releases](https://github.com/OpenCloudGaming/OpenStroid/releases). Android builds are shared in [Discord](https://discord.gg/8EJYaJcNfD).
 
 ## Development
 

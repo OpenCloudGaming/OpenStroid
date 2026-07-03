@@ -303,6 +303,7 @@ jobs:
             echo
             echo "- Source branch: \`${SOURCE_REF}\`"
             echo "- Source commit: \`${RELEASE_SHA}\`"
+            echo "- Android builds: [Discord](https://discord.gg/8EJYaJcNfD)"
           } > release-notes.md
 
       - name: Publish GitHub release
