@@ -26,6 +26,3 @@ dist-ssr
 
 build
 .runtime
-
-# Local extension package artifact
-/OpenStroid-Capture-Extension.zip

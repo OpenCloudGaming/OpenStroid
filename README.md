@@ -1,18 +1,63 @@
-# OpenStroid Desktop
+<h1 align="center">OpenStroid</h1>
 
-Electron-first cloud gaming client. OpenStroid Desktop runs a local bridge on localhost, coordinates Boosteroid auth capture, and displays the user-facing desktop UI. A companion Chrome extension installed in the user's normal Chrome profile captures Boosteroid auth/session state from the real browser session and sends it to the desktop bridge.
+<p align="center">
+  <img src="logo.svg" alt="OpenStroid logo" width="180" />
+</p>
 
-## Desktop-first architecture
+<p align="center">
+  <strong>An open-source desktop client for Boosteroid.</strong>
+</p>
 
-OpenStroid is now an Electron-first desktop client.
+<p align="center">
+  Browse your library, tune your stream, and launch sessions from a community-built app.
+</p>
 
-- The Electron app is the primary product shell.
-- Electron starts and owns the local HTTP bridge on `http://127.0.0.1:3001`.
-- The React UI is rendered inside the Electron window.
-- The Chrome extension in `extension/openstroid-capture/` runs in the user's real Chrome profile and talks to the Electron bridge over localhost.
-- The desktop bridge validates captured upstream state, persists raw artifacts to `.runtime/auth-captures/`, creates the encrypted OpenStroid session, and continues to proxy normalized `/auth`, `/me`, and `/library` routes.
+<p align="center">
+  <a href="https://github.com/OpenCloudGaming/OpenStroid/releases">
+    <img src="https://img.shields.io/github/v/tag/OpenCloudGaming/OpenStroid?style=for-the-badge&label=Download&color=brightgreen" alt="Download">
+  </a>
+  <a href="#development">
+    <img src="https://img.shields.io/badge/Docs-Development-blue?style=for-the-badge" alt="Development">
+  </a>
+  <a href="https://github.com/OpenCloudGaming/OpenStroid/issues">
+    <img src="https://img.shields.io/github/issues/OpenCloudGaming/OpenStroid?style=for-the-badge&label=Issues" alt="Issues">
+  </a>
+  <a href="https://discord.gg/8EJYaJcNfD">
+    <img src="https://img.shields.io/badge/Discord-Join%20Us-7289da?style=for-the-badge&logo=discord&logoColor=white" alt="Discord">
+  </a>
+</p>
 
-## Local development
+<p align="center">
+  <a href="https://github.com/OpenCloudGaming/OpenStroid/stargazers">
+    <img src="https://img.shields.io/github/stars/OpenCloudGaming/OpenStroid?style=flat-square" alt="Stars">
+  </a>
+  <a href="https://github.com/OpenCloudGaming/OpenStroid/releases">
+    <img src="https://img.shields.io/github/downloads/OpenCloudGaming/OpenStroid/total?style=flat-square" alt="Downloads">
+  </a>
+  <a href="LICENSE">
+    <img src="https://img.shields.io/github/license/OpenCloudGaming/OpenStroid?style=flat-square" alt="License">
+  </a>
+</p>
+
+> [!WARNING]
+> OpenStroid is under active development. Expect occasional bugs, rough edges, and platform-specific issues while the client matures.
+>
+> QR login, WebRTC streaming, and gamepad input are still evolving. Report problems on [GitHub Issues](https://github.com/OpenCloudGaming/OpenStroid/issues) or [Discord](https://discord.gg/8EJYaJcNfD).
+
+> [!IMPORTANT]
+> OpenStroid is an independent community project and is not affiliated with, endorsed by, or sponsored by Boosteroid. Boosteroid is a trademark of its respective owner. You must use your own Boosteroid account.
+
+## Overview
+
+OpenStroid is a community-built Electron app for playing Boosteroid from an open-source desktop client. The Electron shell owns a local server on `http://127.0.0.1:3001`, handles Boosteroid QR login, proxies normalized auth and library routes, and renders the React desktop UI with integrated WebRTC streaming.
+
+## Downloads
+
+Grab the latest desktop build from [GitHub Releases](https://github.com/OpenCloudGaming/OpenStroid/releases) when available. Until packaged releases ship, build and run the client locally — see [Development](#development) below.
+
+## Development
+
+### Getting started
 
 ```bash
 bun install
@@ -21,118 +66,72 @@ bun run dev
 ```
 
 What runs in development:
-- Vite renderer: `http://127.0.0.1:3000`
-- Electron desktop shell: launched automatically by `npm run dev`
-- Electron-managed local bridge: `http://127.0.0.1:3001`
 
-Use `npm run dev:bridge` only if you need the local bridge without launching Electron.
+- Electron desktop shell with embedded Vite dev middleware
+- Local server: `http://127.0.0.1:3001`
 
-## Chrome extension setup
+Use `bun run dev:bridge` only if you need the local server without launching Electron.
 
-1. Open `chrome://extensions` in your normal Chrome profile.
-2. Enable Developer Mode.
-3. Click **Load unpacked**.
-4. Select `extension/openstroid-capture/` from this repo.
-5. Open the extension popup.
-6. Set the backend URL to `http://127.0.0.1:3001`.
-7. When OpenStroid Desktop shows a pairing code, paste it into the extension popup.
-8. Start desktop extension capture from the Electron app.
-9. Log in on `https://boosteroid.com` in the same Chrome profile.
+### QR login flow
 
-## Desktop capture flow
+1. Open OpenStroid Desktop and go to the login screen.
+2. Scan the QR code with your phone or the Boosteroid app, or click **Login to Boosteroid** to finish in your browser.
+3. After Boosteroid verifies the QR code, OpenStroid establishes a local session.
+4. The app transitions into the game library.
 
-1. OpenStroid Desktop starts an extension capture session.
-2. The desktop UI shows a user-issued pairing code.
-3. The user pastes that code into the Chrome extension popup.
-4. The extension requests the active ingest session from the Electron bridge using that pairing code.
-5. The user logs in to Boosteroid in real Chrome.
-6. The extension captures relevant cookies, response metadata, and observed JSON auth/session payloads.
-7. The extension submits the capture artifact to `POST /auth/extension/capture` on the Electron bridge.
-8. The bridge validates upstream state with `GET /api/v1/user`, persists the raw artifact, and establishes the encrypted OpenStroid session.
-9. The desktop UI polls `/auth/login/status` and transitions into the game library after success.
+### Scripts
 
-## Local bridge API surface
+| Command | Description |
+|---|---|
+| `bun run dev` | Start the Electron desktop shell with live dev server |
+| `bun run dev:web` | Start the Vite renderer only |
+| `bun run dev:bridge` | Run the local server without Electron |
+| `bun run build` | Type-check and build renderer, server, and Electron main process |
+| `bun run start` | Run the built Electron desktop app |
+| `bun run start:bridge` | Run only the built local server |
+| `bun run preview` | Preview the frontend build |
+| `bun run lint` | Run ESLint |
 
-| Method | Route | Description |
-|---|---|---|
-| `POST` | `/auth/login/start` | Start an extension capture session from the desktop UI |
-| `GET` | `/auth/login/status` | Read latest capture status and establish the local OpenStroid session on success |
-| `GET` | `/auth/login/status/:id` | Read status for a specific capture session |
-| `POST` | `/auth/login/cancel` | Cancel the active capture |
-| `POST` | `/auth/extension/active` | Extension-only route to fetch the active pending capture after presenting the user pairing code |
-| `POST` | `/auth/extension/capture` | Extension-only route to submit captured upstream cookies/payloads |
-| `GET` | `/auth/debug/capture` | Return the latest raw upstream capture artifact for inspection |
-| `POST` | `/auth/logout` | Clear the OpenStroid session and attempt upstream logout |
-| `GET` | `/auth/session` | Validate/refresh current session and return `{ authenticated, user }` |
-| `GET` | `/me` | Return `{ user }` for authenticated clients |
-| `GET` | `/library/installed` | Return `{ games }` from the upstream installed library API |
-| `GET` | `/health` | Local desktop bridge health check |
-
-## Environment variables
+### Environment variables
 
 | Variable | Default | Description |
 |---|---|---|
-| `VITE_API_BASE_URL` | *(empty)* | Renderer API origin. Leave empty in local Electron dev so Vite proxies first-party routes. Never point this at a Boosteroid origin. |
-| `SERVER_PORT` | `3001` | Local Electron bridge port. |
+| `VITE_API_BASE_URL` | *(empty)* | Renderer API origin. Leave empty in local Electron dev so the renderer keeps using first-party routes. Never point this at a Boosteroid origin. |
+| `SERVER_PORT` | `3001` | Local Electron server port. |
 | `UPSTREAM_BASE_URL` | `https://cloud.boosteroid.com` | Upstream Boosteroid base URL. |
 | `SESSION_SECRET` | `openstroid-development-session-secret` | Secret used to encrypt/authenticate the OpenStroid session cookie. Replace in production. |
 | `SESSION_COOKIE_NAME` | `openstroid_session` | First-party auth cookie name. |
 | `SESSION_TTL_SECONDS` | `2592000` | Cookie/session lifetime in seconds. |
 | `COOKIE_SECURE` | `false` in dev, `true` in production | Whether to mark the auth cookie as `Secure`. |
-| `APP_ORIGIN` | *(unset)* | Optional allowed renderer/browser origin if frontend and bridge are split. |
-| `AUTH_CAPTURE_ARTIFACT_DIR` | `<project>/.runtime/auth-captures` | Directory where raw capture JSON artifacts are written. |
-| `AUTH_CAPTURE_TIMEOUT_MS` | `300000` | Maximum time allowed for the extension login session before timing out. |
-| `BACKEND_PROXY_TARGET` | `http://127.0.0.1:3001` | Vite-only proxy target for local renderer development. |
-| `ELECTRON_RENDERER_URL` | `http://127.0.0.1:3000` | Dev-only renderer URL opened by Electron. |
+| `APP_ORIGIN` | *(unset)* | Optional allowed renderer/browser origin if frontend and server are split. |
 
-## Turnstile and capture notes
-
-- The extension-first path is the primary auth mechanism because it operates inside the user's real Chrome profile.
-- The extension can read relevant Boosteroid cookies via Chrome cookie APIs, including HttpOnly cookies when host permissions are granted.
-- Response metadata is captured via `webRequest`, while JSON auth/session payloads are captured from page `fetch`/XHR instrumentation on Boosteroid pages.
-- The extension never automates the Turnstile widget or login form. It passively observes the real session after the user acts normally.
-- The pairing code remains required before the extension can discover an active ingest token from the local bridge.
-
-## Project structure
+## Repository Layout
 
 ```text
-electron/
-└── main.ts                     # Electron main process, window creation, bridge startup
-server/
-├── app.ts                      # Reusable local bridge app and startup helpers
-├── config.ts                   # Runtime config for the bridge
-├── index.ts                    # Standalone bridge entrypoint for non-Electron use
-└── lib/
-    ├── crypto.ts              # Encrypted cookie helpers
-    ├── session.ts             # Session cookie read/write helpers
-    ├── upstream.ts            # Boosteroid upstream client + refresh handling
-    └── authCapture.ts         # Extension-first capture/session orchestration
-src/
-├── api/                       # First-party API client and endpoint wrappers
-├── auth/                      # AuthContext + legacy storage cleanup
-├── components/                # Shared UI components
-├── layouts/                   # Desktop page layout shells
-├── pages/                     # Desktop route-level page components
-├── theme/                     # Mantine theme customization
-└── types/                     # Shared TypeScript interfaces
-extension/
-└── openstroid-capture/        # Unpacked Chrome extension for real-browser Boosteroid capture
+.
+├── electron/                  Electron main process, window creation, server startup
+├── server/                    Local HTTP server, session handling, upstream client
+├── src/                       React desktop UI, auth, streaming, and API client
+├── public/                    Static assets and favicon
+├── tools/                     Dev/build helper scripts
+├── LICENSE                    Project license
+└── logo.svg                   Project logo
 ```
 
-## Scripts
+## Contributing
 
-| Command | Description |
-|---|---|
-| `bun run dev` | Start Vite and launch the Electron desktop shell |
-| `bun run dev:web` | Start the Vite renderer only |
-| `bun run dev:electron` | Launch Electron against the dev renderer |
-| `bun run dev:bridge` | Run the local bridge without Electron |
-| `bun run build` | Type-check and build renderer, bridge, and Electron main process |
-| `bun run start` | Run the built Electron desktop app |
-| `bun run start:bridge` | Run only the built local bridge |
-| `bun run preview` | Preview the frontend build |
-| `bun run lint` | Run ESLint |
+Contributions are welcome. Open a focused pull request, explain user-facing impact clearly, and keep changes scoped to the problem you are solving.
+
+## Star History
+
+<a href="https://www.star-history.com/?repos=OpenCloudGaming%2FOpenStroid&type=date&legend=top-left">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/image?repos=OpenCloudGaming/OpenStroid&type=date&theme=dark&legend=top-left" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/image?repos=OpenCloudGaming/OpenStroid&type=date&legend=top-left" />
+   <img alt="Star History Chart" src="https://api.star-history.com/image?repos=OpenCloudGaming/OpenStroid&type=date&legend=top-left" />
+ </picture>
+</a>
 
 ## License
 
-Apache-2.0 — see [LICENSE](LICENSE).
+OpenStroid is licensed under the [Apache License 2.0](LICENSE).

@@ -2,14 +2,10 @@ import { apiClient } from './client';
 import { API_CONFIG } from './config';
 import { writeSessionHandoff } from '../auth/storage';
 import type {
-  AuthCaptureDebugResponse,
   AuthSession,
   InstalledGame,
   LibraryFacet,
   LibraryDashboard,
-  LoginCaptureMethod,
-  LoginCaptureSessionStatus,
-  LoginCaptureStartResponse,
   QRCodeLoginSessionStatus,
   StreamSessionResponse,
   StreamLaunchResponse,
@@ -29,11 +25,6 @@ function extractSession(data: Record<string, unknown>): AuthSession {
   };
 }
 
-export async function startLoginCapture(method: LoginCaptureMethod = 'extension'): Promise<LoginCaptureStartResponse> {
-  const { data } = await apiClient.post(API_CONFIG.endpoints.loginStart, { method });
-  return data as LoginCaptureStartResponse;
-}
-
 export async function startQRCodeLogin(): Promise<QRCodeLoginSessionStatus> {
   const { data } = await apiClient.post(API_CONFIG.endpoints.qrLoginStart);
   return data as QRCodeLoginSessionStatus;
@@ -48,22 +39,6 @@ export async function getQRCodeLoginStatus(id?: string): Promise<QRCodeLoginSess
 export async function cancelQRCodeLogin(id?: string): Promise<QRCodeLoginSessionStatus> {
   const { data } = await apiClient.post(API_CONFIG.endpoints.qrLoginCancel, id ? { id } : {});
   return data as QRCodeLoginSessionStatus;
-}
-
-export async function getLoginCaptureStatus(id?: string): Promise<LoginCaptureSessionStatus> {
-  const url = id ? `${API_CONFIG.endpoints.loginStatus}/${id}` : API_CONFIG.endpoints.loginStatus;
-  const { data } = await apiClient.get(url);
-  return data as LoginCaptureSessionStatus;
-}
-
-export async function cancelLoginCapture(id?: string): Promise<LoginCaptureSessionStatus> {
-  const { data } = await apiClient.post(API_CONFIG.endpoints.loginCancel, id ? { id } : {});
-  return data as LoginCaptureSessionStatus;
-}
-
-export async function getAuthCaptureDebug(): Promise<AuthCaptureDebugResponse> {
-  const { data } = await apiClient.get(API_CONFIG.endpoints.loginDebugCapture);
-  return data as AuthCaptureDebugResponse;
 }
 
 export async function logout(): Promise<void> {

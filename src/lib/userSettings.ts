@@ -9,7 +9,6 @@ import {
 } from '../stream/streamOptions';
 
 export const SETTINGS_KEYS = {
-  bridgeUrl: 'openstroid:bridgeUrl',
   streamVolume: 'stream_audio_volume',
   streamMuted: 'openstroid:streamMuted',
   streamBitrate: 'bitrateValue',
@@ -36,12 +35,10 @@ export interface StreamDefaults {
 }
 
 export interface AppSettings {
-  bridgeUrl: string;
   stream: StreamDefaults;
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
-  bridgeUrl: 'http://127.0.0.1:3001',
   stream: {
     volume: 70,
     muted: false,
@@ -55,11 +52,6 @@ export const DEFAULT_SETTINGS: AppSettings = {
     statsVisible: true,
   },
 };
-
-function readString(key: string, fallback: string): string {
-  const raw = window.localStorage.getItem(key);
-  return raw && raw.trim() ? raw.trim() : fallback;
-}
 
 function readNumber(key: string, fallback: number, min: number, max?: number): number {
   const value = Number(window.localStorage.getItem(key));
@@ -91,7 +83,6 @@ function readEncoding(): StreamEncodingPreset {
 
 export function readAppSettings(): AppSettings {
   return {
-    bridgeUrl: readString(SETTINGS_KEYS.bridgeUrl, DEFAULT_SETTINGS.bridgeUrl),
     stream: {
       volume: readNumber(SETTINGS_KEYS.streamVolume, DEFAULT_SETTINGS.stream.volume, 0, 100),
       muted: readBool(SETTINGS_KEYS.streamMuted, DEFAULT_SETTINGS.stream.muted),
@@ -108,7 +99,6 @@ export function readAppSettings(): AppSettings {
 }
 
 export function saveAppSettings(settings: AppSettings): void {
-  window.localStorage.setItem(SETTINGS_KEYS.bridgeUrl, settings.bridgeUrl || DEFAULT_SETTINGS.bridgeUrl);
   window.localStorage.setItem(SETTINGS_KEYS.streamVolume, String(settings.stream.volume));
   window.localStorage.setItem(SETTINGS_KEYS.streamMuted, String(settings.stream.muted));
   window.localStorage.setItem(SETTINGS_KEYS.streamBitrate, String(settings.stream.maxBitrate));

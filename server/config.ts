@@ -29,12 +29,8 @@ export const serverConfig = {
   sessionTtlSeconds: parseNumber(process.env.SESSION_TTL_SECONDS, 60 * 60 * 24 * 30),
   cookieSecure: parseBoolean(process.env.COOKIE_SECURE, nodeEnv === 'production'),
   appOrigin: process.env.APP_ORIGIN,
-  authCaptureArtifactDir:
-    process.env.AUTH_CAPTURE_ARTIFACT_DIR ??
-    path.resolve(projectRoot, '.runtime', 'auth-captures'),
   cookieAuthStorePath:
     process.env.COOKIE_AUTH_STORE_PATH ??
     path.resolve(projectRoot, '.runtime', 'cookie-auth-sessions.json'),
-  authCaptureTimeoutMs: parseNumber(process.env.AUTH_CAPTURE_TIMEOUT_MS, 5 * 60 * 1000),
   distDir: path.resolve(projectRoot, 'dist'),
 } as const;
