@@ -25,4 +25,5 @@ dist-ssr
 .env
 
 build
+dist-release
 .runtime

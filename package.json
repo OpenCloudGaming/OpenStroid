@@ -3,12 +3,18 @@
   "private": true,
   "version": "0.1.0",
   "description": "Open-source cloud gaming client",
+  "author": {
+    "name": "zortos293",
+    "email": "zortos293@users.noreply.github.com"
+  },
   "type": "module",
+  "main": "build/electron/electron/main.js",
   "scripts": {
     "dev": "node tools/run-electron-dev.mjs",
     "dev:web": "vite",
     "dev:backend": "tsx watch server/index.ts",
     "build": "tsc -b && tsc -p tsconfig.server.json && tsc -p tsconfig.electron.json && vite build",
+    "dist": "npm run build && electron-builder",
     "lint": "eslint .",
     "preview": "vite preview",
     "start": "electron build/electron/electron/main.js",
@@ -25,7 +31,6 @@
     "@tabler/icons-react": "^3.41.1",
     "axios": "^1.15.0",
     "cookie-parser": "^1.4.7",
-    "electron": "37.10.3",
     "express": "^5.2.1",
     "lucide-react": "^1.22.0",
     "motion": "^12.42.2",
@@ -45,6 +50,8 @@
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^6.0.1",
     "concurrently": "^9.2.1",
+    "electron": "37.10.3",
+    "electron-builder": "^26.15.3",
     "eslint": "^9.39.4",
     "eslint-plugin-react-hooks": "^7.0.1",
     "eslint-plugin-react-refresh": "^0.5.2",
@@ -59,5 +66,58 @@
   },
   "trustedDependencies": [
     "electron"
-  ]
+  ],
+  "build": {
+    "appId": "ai.capy.openstroid",
+    "productName": "OpenStroid",
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "OpenCloudGaming",
+        "repo": "OpenStroid"
+      }
+    ],
+    "npmRebuild": false,
+    "nodeGypRebuild": false,
+    "buildDependenciesFromSource": false,
+    "directories": {
+      "output": "dist-release"
+    },
+    "files": [
+      "dist/**",
+      "build/electron/**",
+      "build/server/**",
+      "package.json"
+    ],
+    "asar": true,
+    "win": {
+      "target": [
+        "nsis",
+        "portable"
+      ]
+    },
+    "nsis": {
+      "artifactName": "OpenStroid-v${version}-setup-${arch}.${ext}"
+    },
+    "portable": {
+      "artifactName": "OpenStroid-v${version}-portable-${arch}.${ext}"
+    },
+    "mac": {
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "category": "public.app-category.games",
+      "artifactName": "OpenStroid-v${version}-mac-${arch}.${ext}"
+    },
+    "linux": {
+      "target": [
+        "AppImage",
+        "deb"
+      ],
+      "category": "Game",
+      "maintainer": "zortos293 <zortos293@users.noreply.github.com>",
+      "artifactName": "OpenStroid-v${version}-linux-${arch}.${ext}"
+    }
+  }
 }

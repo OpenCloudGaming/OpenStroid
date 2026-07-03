@@ -1,0 +1,298 @@
+name: release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version to release, e.g. 1.2.3 or v1.2.3
+        required: true
+        type: string
+      branch:
+        description: Branch to build and release
+        required: true
+        default: main
+        type: string
+
+concurrency:
+  group: release-${{ inputs.branch }}-${{ inputs.version }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  preflight:
+    name: preflight
+    runs-on: blacksmith-2vcpu-ubuntu-2404
+    outputs:
+      version: ${{ steps.release.outputs.version }}
+      prerelease: ${{ steps.release.outputs.prerelease }}
+      make_latest: ${{ steps.release.outputs.make_latest }}
+      release_tag: ${{ steps.release.outputs.release_tag }}
+      source_ref: ${{ steps.release.outputs.source_ref }}
+
+    steps:
+      - name: Resolve release metadata
+        id: release
+        shell: bash
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+          INPUT_BRANCH: ${{ inputs.branch }}
+        run: |
+          raw="${INPUT_VERSION}"
+          case "$raw" in
+            v*) version="${raw#v}" ;;
+            *) version="$raw" ;;
+          esac
+
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$ ]]; then
+            echo "Invalid semver version: $raw" >&2
+            exit 1
+          fi
+
+          source_ref="${INPUT_BRANCH}"
+          if [[ -z "$source_ref" ]]; then
+            echo "Branch is required." >&2
+            exit 1
+          fi
+
+          if [[ "$source_ref" == refs/* || "$source_ref" == origin/* ]]; then
+            echo "Enter a branch name such as main or feature/release, not $source_ref." >&2
+            exit 1
+          fi
+
+          git check-ref-format --branch "$source_ref" >/dev/null
+
+          prerelease=false
+          if [[ "$version" == *-* ]]; then
+            prerelease=true
+          fi
+
+          make_latest=true
+          if [[ "$prerelease" == true ]]; then
+            make_latest=false
+          fi
+
+          {
+            echo "version=$version"
+            echo "prerelease=$prerelease"
+            echo "make_latest=$make_latest"
+            echo "release_tag=v${version}"
+            echo "source_ref=$source_ref"
+          } >> "$GITHUB_OUTPUT"
+
+  prepare-source:
+    name: prepare-source
+    runs-on: blacksmith-2vcpu-ubuntu-2404
+    needs: preflight
+    permissions:
+      contents: write
+    outputs:
+      release_sha: ${{ steps.source.outputs.release_sha }}
+
+    steps:
+      - name: Checkout release branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.preflight.outputs.source_ref }}
+          fetch-depth: 0
+          token: ${{ secrets.RELEASE_PUSH_TOKEN || secrets.GITHUB_TOKEN }}
+
+      - name: Sync package version
+        id: source
+        shell: bash
+        env:
+          RELEASE_VERSION: ${{ needs.preflight.outputs.version }}
+          SOURCE_REF: ${{ needs.preflight.outputs.source_ref }}
+        run: |
+          node tools/sync-release-version.mjs "$RELEASE_VERSION"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add package.json package-lock.json
+          if git diff --cached --quiet; then
+            echo "No version bump changes to commit."
+          else
+            git commit -m "chore(release): prepare v${RELEASE_VERSION}"
+            git push origin HEAD:"$SOURCE_REF"
+          fi
+          echo "release_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: ${{ matrix.label }}
+    runs-on: ${{ matrix.os }}
+    needs:
+      - preflight
+      - prepare-source
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: windows-x64
+            os: blacksmith-2vcpu-windows-2025
+            builder_args: "--win nsis portable --x64"
+            artifact_paths: |
+              dist-release/*-x64.exe
+              dist-release/latest*.yml
+              dist-release/*.blockmap
+          - label: windows-arm64
+            os: blacksmith-2vcpu-windows-2025
+            builder_args: "--win nsis portable --arm64"
+            artifact_paths: |
+              dist-release/*-arm64.exe
+          - label: macos-x64
+            os: blacksmith-6vcpu-macos-15
+            builder_args: "--mac dmg zip --x64"
+            artifact_paths: |
+              dist-release/*.dmg
+              dist-release/*-x64.zip
+          - label: macos-arm64
+            os: blacksmith-6vcpu-macos-15
+            builder_args: "--mac dmg zip --arm64"
+            artifact_paths: |
+              dist-release/*.dmg
+              dist-release/*-arm64.zip
+          - label: linux-x64
+            os: blacksmith-2vcpu-ubuntu-2404
+            builder_args: "--linux AppImage deb --x64"
+            artifact_paths: |
+              dist-release/*-x86_64.AppImage
+              dist-release/*-amd64.deb
+              dist-release/latest-linux.yml
+          - label: linux-arm64
+            os: blacksmith-2vcpu-ubuntu-2404-arm
+            builder_args: "--linux AppImage deb --arm64"
+            artifact_paths: |
+              dist-release/*-arm64.AppImage
+              dist-release/*-arm64.deb
+              dist-release/latest-linux-arm64.yml
+
+    env:
+      CSC_IDENTITY_AUTO_DISCOVERY: "false"
+      ELECTRON_CACHE: ${{ github.workspace }}/.cache/electron
+      ELECTRON_BUILDER_CACHE: ${{ github.workspace }}/.cache/electron-builder
+      npm_config_audit: "false"
+      npm_config_fund: "false"
+      RELEASE_VERSION: ${{ needs.preflight.outputs.version }}
+      USE_SYSTEM_FPM: ${{ matrix.label == 'linux-arm64' && 'true' || 'false' }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare-source.outputs.release_sha }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Cache Electron binaries
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ github.workspace }}/.cache/electron
+            ${{ github.workspace }}/.cache/electron-builder
+          key: ${{ runner.os }}-electron-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-electron-
+
+      - name: Install Linux packaging packages
+        if: runner.os == 'Linux'
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends fakeroot rpm
+
+      - name: Install FPM for arm64 deb builds
+        if: matrix.label == 'linux-arm64'
+        run: |
+          sudo apt-get install -y ruby ruby-dev build-essential
+          sudo gem install fpm
+
+      - name: Install dependencies
+        run: npm ci --prefer-offline --no-audit --progress=false
+
+      - name: Validate package version
+        run: node tools/sync-release-version.mjs --check "$RELEASE_VERSION"
+
+      - name: Build app
+        run: npm run build
+
+      - name: Package installers
+        run: npx electron-builder --publish never ${{ matrix.builder_args }}
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: openstroid-${{ matrix.label }}
+          path: ${{ matrix.artifact_paths }}
+          if-no-files-found: error
+
+  release:
+    name: publish-release
+    runs-on: blacksmith-2vcpu-ubuntu-2404
+    needs:
+      - preflight
+      - prepare-source
+      - build
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout release source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare-source.outputs.release_sha }}
+          fetch-depth: 0
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-artifacts
+          merge-multiple: true
+
+      - name: Build release notes
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ needs.preflight.outputs.release_tag }}
+          RELEASE_SHA: ${{ needs.prepare-source.outputs.release_sha }}
+          SOURCE_REF: ${{ needs.preflight.outputs.source_ref }}
+        run: |
+          previous_tag="$(git describe --tags --abbrev=0 --match 'v[0-9]*' "${RELEASE_SHA}^" 2>/dev/null || true)"
+          if [[ -n "$previous_tag" ]]; then
+            range="${previous_tag}..${RELEASE_SHA}"
+            heading="Changes since ${previous_tag}"
+          else
+            range="${RELEASE_SHA}"
+            heading="Changes in this release"
+          fi
+
+          {
+            echo "## ${heading}"
+            echo
+            if [[ -n "$previous_tag" ]]; then
+              echo "[Compare ${previous_tag}...${RELEASE_TAG}](https://github.com/${GITHUB_REPOSITORY}/compare/${previous_tag}...${RELEASE_TAG})"
+              echo
+            fi
+            git log --pretty=format:'- %s ([%h](https://github.com/${{ github.repository }}/commit/%H)) by %an' "$range"
+            echo
+            echo
+            echo "## Build"
+            echo
+            echo "- Source branch: \`${SOURCE_REF}\`"
+            echo "- Source commit: \`${RELEASE_SHA}\`"
+          } > release-notes.md
+
+      - name: Publish GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.preflight.outputs.release_tag }}
+          target_commitish: ${{ needs.prepare-source.outputs.release_sha }}
+          name: OpenStroid v${{ needs.preflight.outputs.version }}
+          body_path: release-notes.md
+          prerelease: ${{ needs.preflight.outputs.prerelease }}
+          make_latest: ${{ needs.preflight.outputs.make_latest }}
+          files: release-artifacts/**/*
