@@ -12,9 +12,14 @@ on:
         required: true
         default: main
         type: string
+      allow_unsigned:
+        description: Confirm Windows/macOS installers are intentionally unsigned
+        required: true
+        default: false
+        type: boolean
 
 concurrency:
-  group: release-${{ inputs.branch }}-${{ inputs.version }}
+  group: release-${{ inputs.branch }}
   cancel-in-progress: false
 
 permissions:
@@ -23,7 +28,7 @@ permissions:
 jobs:
   preflight:
     name: preflight
-    runs-on: blacksmith-2vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     outputs:
       version: ${{ steps.release.outputs.version }}
       prerelease: ${{ steps.release.outputs.prerelease }}
@@ -38,6 +43,7 @@ jobs:
         env:
           INPUT_VERSION: ${{ inputs.version }}
           INPUT_BRANCH: ${{ inputs.branch }}
+          ALLOW_UNSIGNED: ${{ inputs.allow_unsigned }}
         run: |
           raw="${INPUT_VERSION}"
           case "$raw" in
@@ -63,6 +69,12 @@ jobs:
 
           git check-ref-format --branch "$source_ref" >/dev/null
 
+          if [[ "$ALLOW_UNSIGNED" != "true" ]]; then
+            echo "Windows and macOS release artifacts are unsigned." >&2
+            echo "Re-run with allow_unsigned=true after confirming unsigned installers are acceptable." >&2
+            exit 1
+          fi
+
           prerelease=false
           if [[ "$version" == *-* ]]; then
             prerelease=true
@@ -83,7 +95,7 @@ jobs:
 
   prepare-source:
     name: prepare-source
-    runs-on: blacksmith-2vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     needs: preflight
     permissions:
       contents: write
@@ -97,6 +109,11 @@ jobs:
           ref: ${{ needs.preflight.outputs.source_ref }}
           fetch-depth: 0
           token: ${{ secrets.RELEASE_PUSH_TOKEN || secrets.GITHUB_TOKEN }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
 
       - name: Sync package version
         id: source
@@ -128,38 +145,40 @@ jobs:
       matrix:
         include:
           - label: windows-x64
-            os: blacksmith-2vcpu-windows-2025
+            os: windows-2025
             builder_args: "--win nsis portable --x64"
             artifact_paths: |
               dist-release/*-x64.exe
               dist-release/latest*.yml
               dist-release/*.blockmap
           - label: windows-arm64
-            os: blacksmith-2vcpu-windows-2025
+            os: windows-2025
             builder_args: "--win nsis portable --arm64"
             artifact_paths: |
               dist-release/*-arm64.exe
           - label: macos-x64
-            os: blacksmith-6vcpu-macos-15
+            os: macos-15-intel
             builder_args: "--mac dmg zip --x64"
             artifact_paths: |
               dist-release/*.dmg
               dist-release/*-x64.zip
           - label: macos-arm64
-            os: blacksmith-6vcpu-macos-15
+            os: macos-15
             builder_args: "--mac dmg zip --arm64"
             artifact_paths: |
               dist-release/*.dmg
               dist-release/*-arm64.zip
           - label: linux-x64
-            os: blacksmith-2vcpu-ubuntu-2404
+            os: ubuntu-24.04
             builder_args: "--linux AppImage deb --x64"
             artifact_paths: |
               dist-release/*-x86_64.AppImage
+              dist-release/*-linux-x64.AppImage
               dist-release/*-amd64.deb
+              dist-release/*-linux-x64.deb
               dist-release/latest-linux.yml
           - label: linux-arm64
-            os: blacksmith-2vcpu-ubuntu-2404-arm
+            os: ubuntu-24.04-arm
             builder_args: "--linux AppImage deb --arm64"
             artifact_paths: |
               dist-release/*-arm64.AppImage
@@ -216,7 +235,7 @@ jobs:
         run: npm ci --prefer-offline --no-audit --progress=false
 
       - name: Validate package version
-        run: node tools/sync-release-version.mjs --check "$RELEASE_VERSION"
+        run: node tools/sync-release-version.mjs --check "${{ needs.preflight.outputs.version }}"
 
       - name: Build app
         run: npm run build
@@ -233,7 +252,7 @@ jobs:
 
   release:
     name: publish-release
-    runs-on: blacksmith-2vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     needs:
       - preflight
       - prepare-source
