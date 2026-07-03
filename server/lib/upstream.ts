@@ -221,6 +221,57 @@ async function upstreamPost<T>(auth: UpstreamAuthInput, path: string, body: unkn
   return data as T;
 }
 
+async function upstreamPatch<T>(auth: UpstreamAuthInput, path: string, body: unknown = {}): Promise<T> {
+  const { data } = await upstreamClient.patch(path, body, {
+    headers: upstreamAuthHeaders(auth),
+  });
+  return data as T;
+}
+
+async function upstreamDelete<T>(auth: UpstreamAuthInput, path: string): Promise<T> {
+  const { data } = await upstreamClient.delete(path, {
+    headers: upstreamAuthHeaders(auth),
+  });
+  return data as T;
+}
+
+function appendQuery(pathname: string, query?: Record<string, unknown>): string {
+  const params = new URLSearchParams();
+
+  for (const [key, value] of Object.entries(query ?? {})) {
+    if (value === undefined || value === null || value === '') continue;
+    if (Array.isArray(value)) {
+      value.forEach((item) => {
+        if (item !== undefined && item !== null && item !== '') {
+          params.append(key, String(item));
+        }
+      });
+      continue;
+    }
+    params.set(key, String(value));
+  }
+
+  const queryString = params.toString();
+  return queryString ? `${pathname}?${queryString}` : pathname;
+}
+
+function unwrapArray(data: unknown, keys: string[] = []): unknown[] {
+  if (Array.isArray(data)) return data;
+  if (!data || typeof data !== 'object') return [];
+
+  const record = data as Record<string, unknown>;
+  for (const key of ['data', 'applications', 'items', 'results', ...keys]) {
+    const value = record[key];
+    if (Array.isArray(value)) return value;
+    if (value && typeof value === 'object') {
+      const nested = unwrapArray(value, keys);
+      if (nested.length > 0) return nested;
+    }
+  }
+
+  return [];
+}
+
 function normalizeAuthorizationValue(accessToken: string): string {
   const plusAsSpace = accessToken.replace(/\+/g, ' ');
   let decoded = plusAsSpace;
@@ -301,23 +352,102 @@ export async function getUpstreamUser(auth: UpstreamAuthInput): Promise<Record<s
   return unwrapRecord(data);
 }
 
-export async function getInstalledGamesUpstream(auth: UpstreamAuthInput): Promise<unknown[]> {
-  const data = await upstreamGet<unknown>(auth, '/api/v1/boostore/applications/installed');
-
-  if (Array.isArray(data)) return data;
-  if (data && typeof data === 'object' && Array.isArray((data as { data?: unknown[] }).data)) {
-    return (data as { data: unknown[] }).data;
-  }
-  if (data && typeof data === 'object' && Array.isArray((data as { applications?: unknown[] }).applications)) {
-    return (data as { applications: unknown[] }).applications;
-  }
-
-  return [];
+export async function getInstalledGamesUpstream(auth: UpstreamAuthInput, query?: Record<string, unknown>): Promise<unknown[]> {
+  const data = await upstreamGet<unknown>(auth, appendQuery('/api/v1/boostore/applications/installed', query));
+  return unwrapArray(data);
 }
 
 export async function getApplicationUpstream(auth: UpstreamAuthInput, appId: number): Promise<Record<string, unknown>> {
   const data = await upstreamGet<unknown>(auth, `/api/v1/boostore/applications/${appId}`);
   return unwrapRecord(data);
+}
+
+export async function getBoostoreApplicationsUpstream(auth: UpstreamAuthInput, query?: Record<string, unknown>): Promise<unknown[]> {
+  const data = await upstreamGet<unknown>(auth, appendQuery('/api/v1/boostore/applications', query));
+  return unwrapArray(data);
+}
+
+export async function searchBoostoreApplicationsUpstream(auth: UpstreamAuthInput, query?: Record<string, unknown>): Promise<unknown[]> {
+  const data = await upstreamGet<unknown>(auth, appendQuery('/api/v1/boostore/applications/search', query));
+  return unwrapArray(data);
+}
+
+export async function getNewApplicationsUpstream(auth: UpstreamAuthInput, query?: Record<string, unknown>): Promise<unknown[]> {
+  const data = await upstreamGet<unknown>(auth, appendQuery('/api/v1/boostore/applications/new', query));
+  return unwrapArray(data);
+}
+
+export async function getBoostoreCarouselUpstream(auth: UpstreamAuthInput, query?: Record<string, unknown>): Promise<unknown[]> {
+  const data = await upstreamGet<unknown>(auth, appendQuery('/api/v1/boostore/carousel', query));
+  return unwrapArray(data, ['slides', 'carousel']);
+}
+
+export async function getApplicationCollectionsUpstream(auth: UpstreamAuthInput): Promise<unknown[]> {
+  const data = await upstreamGet<unknown>(auth, '/api/v1/boostore/applications/collections');
+  return unwrapArray(data);
+}
+
+export async function getApplicationGenresUpstream(auth: UpstreamAuthInput): Promise<unknown[]> {
+  const data = await upstreamGet<unknown>(auth, '/api/v1/boostore/applications/genres');
+  return unwrapArray(data);
+}
+
+export async function getApplicationPlatformsUpstream(auth: UpstreamAuthInput): Promise<unknown[]> {
+  const data = await upstreamGet<unknown>(auth, '/api/v1/boostore/applications/platforms');
+  return unwrapArray(data);
+}
+
+export async function getApplicationStoresUpstream(auth: UpstreamAuthInput, store?: string): Promise<unknown[]> {
+  const data = await upstreamGet<unknown>(
+    auth,
+    appendQuery('/api/v1/boostore/applications/stores', store ? { store } : undefined),
+  );
+  return unwrapArray(data);
+}
+
+export async function getApplicationOrderByUpstream(auth: UpstreamAuthInput): Promise<unknown[]> {
+  const data = await upstreamGet<unknown>(auth, '/api/v1/boostore/applications/filters/order-by');
+  return unwrapArray(data);
+}
+
+export async function installApplicationUpstream(auth: UpstreamAuthInput, appId: number): Promise<Record<string, unknown>> {
+  const data = await upstreamPatch<unknown>(auth, `/api/v1/boostore/applications/installed/${appId}`, {});
+  return unwrapRecord(data);
+}
+
+export async function uninstallApplicationUpstream(auth: UpstreamAuthInput, appId: number): Promise<Record<string, unknown>> {
+  const data = await upstreamDelete<unknown>(auth, `/api/v1/boostore/applications/installed/${appId}`);
+  return unwrapRecord(data);
+}
+
+export async function synchronizeInstalledApplicationUpstream(
+  auth: UpstreamAuthInput,
+  platform: string,
+): Promise<Record<string, unknown>> {
+  const data = await upstreamPost<unknown>(
+    auth,
+    `/api/v1/boostore/applications/installed/synchronize/${encodeURIComponent(platform)}`,
+    {},
+  );
+  return unwrapRecord(data);
+}
+
+export async function getLastSynchronizeUpstream(auth: UpstreamAuthInput, platform: string): Promise<Record<string, unknown>> {
+  const data = await upstreamGet<unknown>(
+    auth,
+    `/api/v1/boostore/applications/installed/synchronize/${encodeURIComponent(platform)}`,
+  );
+  return unwrapRecord(data);
+}
+
+export async function getActiveSubscriptionsUpstream(auth: UpstreamAuthInput): Promise<unknown[]> {
+  const data = await upstreamGet<unknown>(auth, '/api/v1/payments/subscriptions/active');
+  return unwrapArray(data, ['subscriptions']);
+}
+
+export async function getUserLanguagesUpstream(auth: UpstreamAuthInput): Promise<unknown[]> {
+  const data = await upstreamGet<unknown>(auth, '/api/v1/user/languages');
+  return unwrapArray(data, ['languages']);
 }
 
 export async function getStreamingGatewaysUpstream(auth: UpstreamAuthInput): Promise<unknown[]> {
@@ -345,6 +475,22 @@ export async function enqueueStreamingSessionUpstream(auth: UpstreamAuthInput, a
 
 export async function dequeueStreamingSessionUpstream(auth: UpstreamAuthInput): Promise<Record<string, unknown>> {
   const data = await upstreamPost<unknown>(auth, '/api/v2/streaming/session/dequeue', {});
+  return unwrapRecord(data);
+}
+
+export async function postStreamingSessionLogUpstream(
+  auth: UpstreamAuthInput,
+  payload: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const data = await upstreamPost<unknown>(auth, '/api/v1/streaming/session/log', payload);
+  return unwrapRecord(data);
+}
+
+export async function submitStreamingSessionEvaluationUpstream(
+  auth: UpstreamAuthInput,
+  payload: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const data = await upstreamPost<unknown>(auth, '/api/v1/streaming/session/evaluation', payload);
   return unwrapRecord(data);
 }
 

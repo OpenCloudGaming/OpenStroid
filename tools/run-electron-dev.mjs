@@ -14,8 +14,8 @@ async function waitForRenderer() {
 
   while (Date.now() < deadline) {
     try {
-      const response = await fetch(rendererUrl, { method: 'HEAD' });
-      if (response.ok || response.status === 405) {
+      const response = await fetch(rendererUrl);
+      if (response.status > 0) {
         return;
       }
     } catch {

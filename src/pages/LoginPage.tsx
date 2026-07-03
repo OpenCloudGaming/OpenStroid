@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useNavigate, useLocation, Navigate } from 'react-router-dom';
+import { Navigate, useLocation, useNavigate } from 'react-router-dom';
 import {
   Alert,
   Box,
@@ -24,8 +24,8 @@ import {
   IconArrowRight,
   IconBrandChrome,
   IconCheck,
+  IconCopy,
   IconDeviceDesktop,
-  IconExternalLink,
   IconKey,
   IconPlayerStop,
   IconPuzzle,
@@ -44,7 +44,6 @@ import {
 import { useAuth } from '../auth';
 import type {
   ApiError,
-  LoginCaptureMethod,
   LoginCaptureSessionStatus,
   LoginCaptureStatus,
   QRCodeLoginSessionStatus,
@@ -57,20 +56,16 @@ const CAPTURE_TERMINAL_STATUSES = new Set<LoginCaptureStatus>(['succeeded', 'fai
 const QR_TERMINAL_STATUSES = new Set<QRCodeLoginStatus>(['succeeded', 'cancelled', 'timed_out']);
 const EXTENSION_PATH = 'extension/openstroid-capture';
 
-function describeStatus(status: LoginCaptureStatus, method: LoginCaptureMethod | undefined): string {
+function describeCaptureStatus(status: LoginCaptureStatus): string {
   switch (status) {
     case 'starting':
-      return method === 'browser'
-        ? 'Launching the Electron-managed backend browser fallback.'
-        : 'Creating an extension capture session in the desktop bridge.';
+      return 'Creating a local extension capture session.';
     case 'awaiting_user':
-      return method === 'browser'
-        ? 'Complete login in the Electron-managed backend browser window.'
-        : 'Use the OpenStroid Chrome extension while you log in on Boosteroid in your normal Chrome profile.';
+      return 'Pair the extension, sign in on Boosteroid, then keep this page open while OpenStroid waits for the captured session.';
     case 'succeeded':
-      return 'Captured upstream auth state. OpenStroid Desktop is establishing its local first-party session.';
+      return 'Session captured. OpenStroid is ready to continue.';
     case 'failed':
-      return 'Capture failed before a usable upstream session was received.';
+      return 'Capture failed before a usable session was received.';
     case 'cancelled':
       return 'Capture was cancelled.';
     case 'timed_out':
@@ -102,16 +97,17 @@ export function LoginPage() {
   const location = useLocation();
   const [qrSession, setQrSession] = useState<QRCodeLoginSessionStatus | null>(null);
   const [capture, setCapture] = useState<LoginCaptureSessionStatus | null>(null);
-  const [isSubmitting, setIsSubmitting] = useState(false);
   const [isStartingQr, setIsStartingQr] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const [serverError, setServerError] = useState<string | null>(null);
   const [manualImportOpen, setManualImportOpen] = useState(false);
-  const [extensionPairingCode, setExtensionPairingCode] = useState<string | null>(null);
+  const [pairingCode, setPairingCode] = useState<string | null>(null);
+  const [copyState, setCopyState] = useState<'idle' | 'copied' | 'failed'>('idle');
   const capturePollHandle = useRef<number | null>(null);
   const qrPollHandle = useRef<number | null>(null);
   const qrSessionRef = useRef<QRCodeLoginSessionStatus | null>(null);
 
-  const from = (location.state as { from?: { pathname: string } })?.from?.pathname || '/library';
+  const from = (location.state as { from?: { pathname: string } })?.from?.pathname || '/my-games';
 
   const applyQRCodeSession = useCallback((session: QRCodeLoginSessionStatus | null) => {
     qrSessionRef.current = session;
@@ -160,7 +156,8 @@ export function LoginPage() {
     setIsStartingQr(true);
     setServerError(null);
     setCapture(null);
-    setExtensionPairingCode(null);
+    setPairingCode(null);
+    setCopyState('idle');
 
     try {
       const started = await startQRCodeLogin();
@@ -178,7 +175,7 @@ export function LoginPage() {
     }
   }, [applyQRCodeSession, pollQRCodeStatus, stopQRCodePolling]);
 
-  const pollStatus = useCallback(async (captureId: string) => {
+  const pollCaptureStatus = useCallback(async (captureId: string) => {
     try {
       const next = await getLoginCaptureStatus(captureId);
       setCapture(next);
@@ -192,12 +189,12 @@ export function LoginPage() {
 
       if (!CAPTURE_TERMINAL_STATUSES.has(next.status)) {
         capturePollHandle.current = window.setTimeout(() => {
-          void pollStatus(captureId);
+          void pollCaptureStatus(captureId);
         }, CAPTURE_POLL_INTERVAL_MS);
       }
     } catch (err) {
       const axiosErr = err as AxiosError<ApiError>;
-      setServerError(axiosErr.response?.data?.message || 'Failed to read login capture status.');
+      setServerError(axiosErr.response?.data?.message || 'Failed to read login status.');
     }
   }, [from, navigate, refreshSession]);
 
@@ -226,33 +223,31 @@ export function LoginPage() {
     }
   }, [applyQRCodeSession, qrSession, stopQRCodePolling]);
 
-  const startCapture = useCallback(async (method: LoginCaptureMethod) => {
+  const startCapture = useCallback(async () => {
     await cancelActiveQRCode();
     stopCapturePolling();
     setIsSubmitting(true);
     setServerError(null);
     setManualImportOpen(true);
+    setCopyState('idle');
+
     try {
-      const started = await startLoginCapture(method);
-      setExtensionPairingCode(started.extensionPairingCode ?? null);
+      const started = await startLoginCapture('extension');
+      setPairingCode(started.extensionPairingCode ?? null);
       const initialStatus = await getLoginCaptureStatus(started.id);
       setCapture(initialStatus);
-      void pollStatus(started.id);
-      if (method === 'extension') {
-        window.open(started.loginUrl, '_blank', 'noopener,noreferrer');
-      }
+      void pollCaptureStatus(started.id);
+      window.open(started.loginUrl, '_blank', 'noopener,noreferrer');
     } catch (err) {
       const axiosErr = err as AxiosError<ApiError>;
       const fallback = axiosErr.response?.status === 409
         ? 'A login capture is already running. Follow that session or cancel it first.'
-        : method === 'browser'
-          ? 'Could not start the Electron-managed backend browser fallback.'
-          : 'Could not start the desktop extension capture session.';
+        : 'Could not start the extension login session.';
       setServerError(axiosErr.response?.data?.message || fallback);
     } finally {
       setIsSubmitting(false);
     }
-  }, [cancelActiveQRCode, pollStatus, stopCapturePolling]);
+  }, [cancelActiveQRCode, pollCaptureStatus, stopCapturePolling]);
 
   const handleCancel = useCallback(async () => {
     if (!capture) return;
@@ -261,7 +256,7 @@ export function LoginPage() {
     try {
       const cancelled = await cancelLoginCapture(capture.id);
       setCapture(cancelled);
-      setExtensionPairingCode(null);
+      setPairingCode(null);
     } catch (err) {
       const axiosErr = err as AxiosError<ApiError>;
       setServerError(axiosErr.response?.data?.message || 'Failed to cancel the active capture.');
@@ -274,7 +269,7 @@ export function LoginPage() {
     setServerError(null);
     if (capture?.id) {
       stopCapturePolling();
-      await pollStatus(capture.id);
+      await pollCaptureStatus(capture.id);
       return;
     }
 
@@ -282,13 +277,24 @@ export function LoginPage() {
       const latest = await getLoginCaptureStatus();
       setCapture(latest);
       if (!CAPTURE_TERMINAL_STATUSES.has(latest.status)) {
-        void pollStatus(latest.id);
+        void pollCaptureStatus(latest.id);
       }
     } catch (err) {
       const axiosErr = err as AxiosError<ApiError>;
-      setServerError(axiosErr.response?.data?.message || 'No capture session is currently available.');
+      setServerError(axiosErr.response?.data?.message || 'No login session is currently available.');
     }
-  }, [capture?.id, pollStatus, stopCapturePolling]);
+  }, [capture?.id, pollCaptureStatus, stopCapturePolling]);
+
+  const copyPairingCode = useCallback(async () => {
+    if (!pairingCode) return;
+    try {
+      await navigator.clipboard.writeText(pairingCode);
+      setCopyState('copied');
+      window.setTimeout(() => setCopyState('idle'), 1600);
+    } catch {
+      setCopyState('failed');
+    }
+  }, [pairingCode]);
 
   const statusTone = useMemo(() => {
     if (!capture) return 'blue';
@@ -311,20 +317,20 @@ export function LoginPage() {
     <Box
       style={{
         minHeight: '100vh',
-        background: 'linear-gradient(180deg, var(--mantine-color-dark-9), var(--mantine-color-dark-8))',
+        background: '#0b0d12',
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
       }}
     >
-      <Center style={{ position: 'relative', zIndex: 1, width: '100%', padding: '24px' }}>
-        <Stack gap="xl" w="100%" maw={1080}>
+      <Center w="100%" p="lg">
+        <Stack gap="lg" w="100%" maw={1080}>
           <Group gap="sm" justify="center">
-            <ThemeIcon size={42} radius="md" variant="gradient" gradient={{ from: 'brand.5', to: 'accent.6', deg: 135 }}>
-              <IconQrcode size={24} />
+            <ThemeIcon size={56} radius={8} color="cyan" variant="filled">
+              <IconQrcode size={30} />
             </ThemeIcon>
             <Stack gap={0}>
-              <Title order={1} fw={800} style={{ fontSize: '2rem' }}>OpenStroid Desktop</Title>
+              <Title order={1} fw={800} size="h2">OpenStroid Desktop</Title>
               <Text c="dimmed" size="sm">Boosteroid sign-in</Text>
             </Stack>
           </Group>
@@ -332,10 +338,10 @@ export function LoginPage() {
           <Paper
             w="100%"
             p="xl"
-            radius="lg"
+            radius="md"
             style={{
-              backgroundColor: 'rgba(37, 38, 43, 0.84)',
-              border: '1px solid var(--mantine-color-dark-4)',
+              backgroundColor: '#10141b',
+              border: '1px solid rgba(255,255,255,0.08)',
             }}
           >
             <Stack gap="lg">
@@ -350,8 +356,8 @@ export function LoginPage() {
                   style={{
                     minHeight: 360,
                     borderRadius: 8,
-                    border: '1px solid var(--mantine-color-dark-4)',
-                    backgroundColor: 'var(--mantine-color-dark-7)',
+                    border: '1px solid rgba(255,255,255,0.08)',
+                    backgroundColor: '#0b0d12',
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'center',
@@ -370,14 +376,14 @@ export function LoginPage() {
                     />
                   ) : (
                     <Stack gap="sm" align="center">
-                      <Loader color="brand" />
+                      <Loader color="cyan" />
                       <Text size="sm" c="dimmed">Preparing QR code</Text>
                     </Stack>
                   )}
                 </Box>
 
                 <Stack gap="lg" justify="center">
-                  <ThemeIcon size={54} radius="xl" variant="light" color="brand">
+                  <ThemeIcon size={54} radius="xl" variant="light" color="cyan">
                     <IconDeviceDesktop size={26} />
                   </ThemeIcon>
                   <Stack gap="xs">
@@ -393,7 +399,7 @@ export function LoginPage() {
                       <Text size="sm">{describeQRCodeStatus(qrSession)}</Text>
                       {qrSession && !QR_TERMINAL_STATUSES.has(qrSession.status) && (
                         <Group gap="sm">
-                          <Loader size="sm" type="dots" color="brand" />
+                          <Loader size="sm" type="dots" color="cyan" />
                           <Text size="xs" c="dimmed">Polling every {(qrSession.pollIntervalMs || DEFAULT_QR_POLL_INTERVAL_MS) / 1000}s.</Text>
                         </Group>
                       )}
@@ -405,8 +411,7 @@ export function LoginPage() {
 
                   <Group>
                     <Button
-                      variant="gradient"
-                      gradient={{ from: 'brand.5', to: 'accent.6', deg: 135 }}
+                      color="teal"
                       leftSection={<IconRefresh size={16} />}
                       onClick={() => void startQRCodeFlow()}
                       loading={isStartingQr}
@@ -429,38 +434,48 @@ export function LoginPage() {
                 <Stack gap="lg">
                   <Group justify="space-between" align="flex-start">
                     <Stack gap={4} maw={650}>
-                      <Title order={3} fw={600}>Connect with manual import</Title>
+                      <Title order={3} fw={700}>Extension login</Title>
                       <Text size="sm" c="dimmed">
-                        Use the companion Chrome extension to send upstream cookies and auth evidence to the local Electron bridge.
+                        Load <Code>{EXTENSION_PATH}</Code>, set its backend URL to <Code>http://127.0.0.1:3001</Code>, then pair it with the code below.
                       </Text>
                     </Stack>
-                    <ThemeIcon size={44} radius="xl" variant="light" color="brand">
-                      <IconPuzzle size={22} />
-                    </ThemeIcon>
+                    <Button
+                      size="md"
+                      color="teal"
+                      leftSection={<IconPuzzle size={16} />}
+                      onClick={() => void startCapture()}
+                      loading={isSubmitting}
+                    >
+                      Start login
+                    </Button>
                   </Group>
 
                   <List
                     spacing="xs"
                     size="sm"
-                    icon={<ThemeIcon color="brand" size={22} radius="xl"><IconCheck size={14} /></ThemeIcon>}
+                    icon={<ThemeIcon color="teal" size={22} radius="xl"><IconCheck size={14} /></ThemeIcon>}
                   >
                     <List.Item>Run OpenStroid Desktop so the local bridge is available on <Code>http://127.0.0.1:3001</Code>.</List.Item>
                     <List.Item>Load the unpacked Chrome extension from <Code>{EXTENSION_PATH}</Code>.</List.Item>
-                    <List.Item>Set the extension backend URL to <Code>http://127.0.0.1:3001</Code> and paste the pairing code shown below.</List.Item>
+                    <List.Item>Set the extension backend URL to <Code>http://127.0.0.1:3001</Code>.</List.Item>
                     <List.Item>Log in on <Code>boosteroid.com</Code> in that same Chrome profile.</List.Item>
                   </List>
 
+                  {pairingCode && (
+                    <Paper p="md" radius="md" bg="rgba(20, 184, 166, 0.08)" style={{ border: '1px solid rgba(20,184,166,0.25)' }}>
+                      <Group justify="space-between" align="center">
+                        <Stack gap={2}>
+                          <Text size="xs" c="dimmed">Pairing code</Text>
+                          <Code fz={28} fw={800}>{pairingCode}</Code>
+                        </Stack>
+                        <Button variant="light" color={copyState === 'failed' ? 'red' : 'teal'} leftSection={<IconCopy size={16} />} onClick={() => void copyPairingCode()}>
+                          {copyState === 'copied' ? 'Copied' : copyState === 'failed' ? 'Copy failed' : 'Copy'}
+                        </Button>
+                      </Group>
+                    </Paper>
+                  )}
+
                   <Group>
-                    <Button
-                      size="md"
-                      variant="gradient"
-                      gradient={{ from: 'brand.5', to: 'accent.6', deg: 135 }}
-                      leftSection={<IconPuzzle size={16} />}
-                      onClick={() => void startCapture('extension')}
-                      loading={isSubmitting}
-                    >
-                      Start desktop extension capture
-                    </Button>
                     <Button
                       size="md"
                       variant="light"
@@ -476,20 +491,16 @@ export function LoginPage() {
                       onClick={() => void handleRefresh()}
                       disabled={isSubmitting}
                     >
-                      Refresh capture status
+                      Refresh status
                     </Button>
                   </Group>
 
-                  <Alert color={statusTone} variant="light" title={capture ? `Status: ${capture.status}` : 'No capture running'}>
+                  <Alert color={statusTone} variant="light" title={capture ? `Status: ${capture.status}` : 'No extension login running'}>
                     <Stack gap={6}>
-                      <Text size="sm">{capture ? describeStatus(capture.status, capture.captureMethod) : 'Start a capture session in OpenStroid Desktop, then finish the pairing flow in Chrome.'}</Text>
+                      <Text size="sm">{capture ? describeCaptureStatus(capture.status) : 'Start extension login, then finish the pairing flow in Chrome.'}</Text>
                       {capture && (
                         <>
                           <Text size="xs" c="dimmed">Capture ID: <Code>{capture.id}</Code></Text>
-                          <Text size="xs" c="dimmed">Method: <Code>{capture.captureMethod}</Code></Text>
-                          {extensionPairingCode && capture.captureMethod === 'extension' && (
-                            <Text size="xs" c="dimmed">Pairing code: <Code>{extensionPairingCode}</Code></Text>
-                          )}
                           <Text size="xs" c="dimmed">Timeout: {new Date(capture.timeoutAt).toLocaleString()}</Text>
                           {capture.finalUrl && <Text size="xs" c="dimmed">Final URL: <Code>{capture.finalUrl}</Code></Text>}
                           {capture.errors.length > 0 && (
@@ -502,8 +513,8 @@ export function LoginPage() {
                       )}
                       {capture && !CAPTURE_TERMINAL_STATUSES.has(capture.status) && (
                         <Group gap="sm">
-                          <Loader size="sm" type="dots" color="brand" />
-                          <Text size="xs" c="dimmed">Electron is polling capture status every {CAPTURE_POLL_INTERVAL_MS / 1000}s.</Text>
+                          <Loader size="sm" type="dots" color="teal" />
+                          <Text size="xs" c="dimmed">Polling extension login status every {CAPTURE_POLL_INTERVAL_MS / 1000}s.</Text>
                         </Group>
                       )}
                       {capture?.status === 'succeeded' && (
@@ -517,7 +528,7 @@ export function LoginPage() {
                             navigate(from, { replace: true });
                           }}
                         >
-                          Continue to my library
+                          Continue to my games
                         </Button>
                       )}
                       {capture && !CAPTURE_TERMINAL_STATUSES.has(capture.status) && (
@@ -528,32 +539,11 @@ export function LoginPage() {
                           leftSection={<IconPlayerStop size={14} />}
                           onClick={() => void handleCancel()}
                         >
-                          Cancel capture
+                          Cancel login
                         </Button>
                       )}
                     </Stack>
                   </Alert>
-
-                  <Stack gap="xs">
-                    <Title order={4} fw={600}>Electron-managed browser fallback</Title>
-                    <Text size="sm" c="dimmed">
-                      Use only if the extension path is temporarily unavailable.
-                    </Text>
-                    <Group>
-                      <Button
-                        size="sm"
-                        variant="subtle"
-                        leftSection={<IconExternalLink size={14} />}
-                        onClick={() => void startCapture('browser')}
-                        loading={isSubmitting}
-                      >
-                        Start browser fallback
-                      </Button>
-                      <Text size="sm" c="dimmed">
-                        Companion extension folder: <Code>{EXTENSION_PATH}</Code>
-                      </Text>
-                    </Group>
-                  </Stack>
                 </Stack>
               </Collapse>
             </Stack>

@@ -11,22 +11,39 @@ import {
 import { qrCodeLoginManager, type QRCodeLoginArtifact } from './lib/qrLogin.js';
 import { clearSession, createSession, readSession, writeSession } from './lib/session.js';
 import {
+  getActiveSubscriptionsUpstream,
   dequeueStreamingSessionUpstream,
   enqueueStreamingSessionUpstream,
   getActiveSessionsUpstream,
   getApplicationUpstream,
+  getApplicationCollectionsUpstream,
+  getApplicationGenresUpstream,
+  getApplicationOrderByUpstream,
+  getApplicationPlatformsUpstream,
+  getApplicationStoresUpstream,
+  getBoostoreApplicationsUpstream,
+  getBoostoreCarouselUpstream,
   getCookieAuthCookies,
   getInstalledGamesUpstream,
   getLastSessionLiveUpstream,
   getLastSessionUpstream,
+  getLastSynchronizeUpstream,
+  getNewApplicationsUpstream,
   getStreamingGatewaysUpstream,
   getStreamingSessionDetailsUpstream,
   getUpstreamUser,
+  getUserLanguagesUpstream,
+  installApplicationUpstream,
   isCookieAuthToken,
   logoutUpstream,
   normalizeError,
+  postStreamingSessionLogUpstream,
+  searchBoostoreApplicationsUpstream,
   startStreamingSessionV1Upstream,
   startStreamingSessionV2Upstream,
+  submitStreamingSessionEvaluationUpstream,
+  synchronizeInstalledApplicationUpstream,
+  uninstallApplicationUpstream,
   withRefresh,
 } from './lib/upstream.js';
 import type { BridgeSession } from './lib/session.js';
@@ -116,6 +133,23 @@ export function createBridgeApp() {
       return null;
     }
     return session;
+  }
+
+  function pickQuery(query: Request['query'], allowedKeys: string[]): Record<string, unknown> {
+    const picked: Record<string, unknown> = {};
+    for (const key of allowedKeys) {
+      const value = query[key];
+      if (value !== undefined) picked[key] = value;
+    }
+    return picked;
+  }
+
+  async function optionalResult<T>(request: () => Promise<T>, fallback: T): Promise<T> {
+    try {
+      return await request();
+    } catch {
+      return fallback;
+    }
   }
 
   function findNestedString(value: unknown, keys: string[], depth = 0): string | null {
@@ -892,7 +926,14 @@ export function createBridgeApp() {
   app.post('/auth/login/start', async (req, res, next) => {
     try {
       const requestedMethod = req.body?.method;
-      const method: CaptureMethod = requestedMethod === 'browser' ? 'browser' : 'extension';
+      if (requestedMethod && requestedMethod !== 'extension') {
+        res.status(400).json({
+          message: 'OpenStroid login now uses the Chrome extension capture flow. Browser automation login is disabled.',
+        });
+        return;
+      }
+
+      const method: CaptureMethod = 'extension';
       const capture = await authCaptureManager.start(method);
       clearSession(res);
       res.status(202).json(capture);
@@ -1064,12 +1105,32 @@ export function createBridgeApp() {
     }
   });
 
+  const libraryQueryKeys = [
+    'page',
+    'paginate',
+    'name',
+    'search',
+    'query',
+    'title',
+    'collection',
+    'genre',
+    'platform',
+    'store',
+    'orderBy',
+    'sort',
+    'monetizeType',
+    'controller',
+    'time',
+    'isSub',
+  ];
+
   app.get('/library/installed', async (req, res, next) => {
     const session = requireSession(req, res);
     if (!session) return;
 
     try {
-      const refreshed = await withRefresh(session, getInstalledGamesUpstream);
+      const query = pickQuery(req.query, ['page', 'paginate', 'store']);
+      const refreshed = await withRefresh(session, (accessToken) => getInstalledGamesUpstream(accessToken, query));
       writeSession(res, refreshed.session);
       res.json({ games: refreshed.result });
     } catch (error) {
@@ -1079,6 +1140,303 @@ export function createBridgeApp() {
       }
 
       clearSession(res);
+      next(error);
+    }
+  });
+
+  app.get('/library/dashboard', async (req, res, next) => {
+    const session = requireSession(req, res);
+    if (!session) return;
+
+    try {
+      const query = pickQuery(req.query, libraryQueryKeys);
+      const refreshed = await withRefresh(session, async (accessToken) => {
+        const [
+          user,
+          installedGames,
+          catalogGames,
+          newGames,
+          carousel,
+          collections,
+          genres,
+          platforms,
+          orderBy,
+          subscriptions,
+          activeSessions,
+          lastSession,
+          languages,
+        ] = await Promise.all([
+          optionalResult(() => getUpstreamUser(accessToken), null),
+          optionalResult(() => getInstalledGamesUpstream(accessToken, { page: 1, paginate: 50 }), []),
+          optionalResult(() => getBoostoreApplicationsUpstream(accessToken, { page: 1, paginate: 24, ...query }), []),
+          optionalResult(() => getNewApplicationsUpstream(accessToken, { time: Math.floor(Date.now() / 1000) }), []),
+          optionalResult(() => getBoostoreCarouselUpstream(accessToken, { isSub: true }), []),
+          optionalResult(() => getApplicationCollectionsUpstream(accessToken), []),
+          optionalResult(() => getApplicationGenresUpstream(accessToken), []),
+          optionalResult(() => getApplicationPlatformsUpstream(accessToken), []),
+          optionalResult(() => getApplicationOrderByUpstream(accessToken), []),
+          optionalResult(() => getActiveSubscriptionsUpstream(accessToken), []),
+          optionalResult(() => getActiveSessionsUpstream(accessToken), null),
+          optionalResult(() => getLastSessionUpstream(accessToken), null),
+          optionalResult(() => getUserLanguagesUpstream(accessToken), []),
+        ]);
+
+        return {
+          user,
+          installedGames,
+          catalogGames,
+          newGames,
+          carousel,
+          facets: {
+            collections,
+            genres,
+            platforms,
+            orderBy,
+            languages,
+          },
+          account: {
+            subscriptions,
+          },
+          sessions: {
+            active: activeSessions,
+            last: lastSession,
+          },
+          generatedAt: new Date().toISOString(),
+        };
+      });
+
+      writeSession(res, refreshed.session);
+      res.json(refreshed.result);
+    } catch (error) {
+      if (!isCookieAuthToken(session.accessToken)) {
+        clearSession(res);
+      }
+      next(error);
+    }
+  });
+
+  app.get('/library/catalog', async (req, res, next) => {
+    const session = requireSession(req, res);
+    if (!session) return;
+
+    try {
+      const query = pickQuery(req.query, libraryQueryKeys);
+      const refreshed = await withRefresh(session, (accessToken) => getBoostoreApplicationsUpstream(accessToken, query));
+      writeSession(res, refreshed.session);
+      res.json({ games: refreshed.result });
+    } catch (error) {
+      if (!isCookieAuthToken(session.accessToken)) {
+        clearSession(res);
+      }
+      next(error);
+    }
+  });
+
+  function firstQueryString(query: Record<string, unknown>, keys: string[]): string {
+    for (const key of keys) {
+      const value = query[key];
+      if (typeof value === 'string' && value.trim()) return value.trim();
+      if (Array.isArray(value)) {
+        const found = value.find((item): item is string => typeof item === 'string' && item.trim().length > 0);
+        if (found) return found.trim();
+      }
+    }
+    return '';
+  }
+
+  function normalizeSearchQuery(query: Record<string, unknown>): Record<string, unknown> {
+    const searchText = firstQueryString(query, ['name', 'search', 'query', 'title']);
+    return searchText ? { name: searchText } : {};
+  }
+
+  app.get('/library/search', async (req, res, next) => {
+    const session = requireSession(req, res);
+    if (!session) return;
+
+    try {
+      const query = normalizeSearchQuery(pickQuery(req.query, libraryQueryKeys));
+      const refreshed = await withRefresh(session, (accessToken) => searchBoostoreApplicationsUpstream(accessToken, query));
+      writeSession(res, refreshed.session);
+      res.json({ games: refreshed.result });
+    } catch (error) {
+      if (!isCookieAuthToken(session.accessToken)) {
+        clearSession(res);
+      }
+      next(error);
+    }
+  });
+
+  app.get('/library/new', async (req, res, next) => {
+    const session = requireSession(req, res);
+    if (!session) return;
+
+    try {
+      const query = pickQuery(req.query, libraryQueryKeys);
+      const refreshed = await withRefresh(session, (accessToken) => getNewApplicationsUpstream(accessToken, query));
+      writeSession(res, refreshed.session);
+      res.json({ games: refreshed.result });
+    } catch (error) {
+      if (!isCookieAuthToken(session.accessToken)) {
+        clearSession(res);
+      }
+      next(error);
+    }
+  });
+
+  app.get('/library/carousel', async (req, res, next) => {
+    const session = requireSession(req, res);
+    if (!session) return;
+
+    try {
+      const query = pickQuery(req.query, ['isSub']);
+      const refreshed = await withRefresh(session, (accessToken) => getBoostoreCarouselUpstream(accessToken, query));
+      writeSession(res, refreshed.session);
+      res.json({ items: refreshed.result });
+    } catch (error) {
+      if (!isCookieAuthToken(session.accessToken)) {
+        clearSession(res);
+      }
+      next(error);
+    }
+  });
+
+  app.get('/library/facets', async (req, res, next) => {
+    const session = requireSession(req, res);
+    if (!session) return;
+
+    try {
+      const refreshed = await withRefresh(session, async (accessToken) => {
+        const [collections, genres, platforms, orderBy, languages] = await Promise.all([
+          optionalResult(() => getApplicationCollectionsUpstream(accessToken), []),
+          optionalResult(() => getApplicationGenresUpstream(accessToken), []),
+          optionalResult(() => getApplicationPlatformsUpstream(accessToken), []),
+          optionalResult(() => getApplicationOrderByUpstream(accessToken), []),
+          optionalResult(() => getUserLanguagesUpstream(accessToken), []),
+        ]);
+
+        return { collections, genres, platforms, orderBy, languages };
+      });
+
+      writeSession(res, refreshed.session);
+      res.json(refreshed.result);
+    } catch (error) {
+      if (!isCookieAuthToken(session.accessToken)) {
+        clearSession(res);
+      }
+      next(error);
+    }
+  });
+
+  app.get('/library/stores/:store', async (req, res, next) => {
+    const session = requireSession(req, res);
+    if (!session) return;
+
+    try {
+      const refreshed = await withRefresh(session, (accessToken) => getApplicationStoresUpstream(accessToken, req.params.store));
+      writeSession(res, refreshed.session);
+      res.json({ games: refreshed.result });
+    } catch (error) {
+      if (!isCookieAuthToken(session.accessToken)) {
+        clearSession(res);
+      }
+      next(error);
+    }
+  });
+
+  app.get('/library/apps/:appId', async (req, res, next) => {
+    const session = requireSession(req, res);
+    if (!session) return;
+
+    const appId = Number(req.params.appId);
+    if (!Number.isInteger(appId) || appId <= 0) {
+      res.status(400).json({ message: 'A valid appId is required.' });
+      return;
+    }
+
+    try {
+      const refreshed = await withRefresh(session, (accessToken) => getApplicationUpstream(accessToken, appId));
+      writeSession(res, refreshed.session);
+      res.json({ game: refreshed.result });
+    } catch (error) {
+      if (!isCookieAuthToken(session.accessToken)) {
+        clearSession(res);
+      }
+      next(error);
+    }
+  });
+
+  app.post('/library/apps/:appId/install', async (req, res, next) => {
+    const session = requireSession(req, res);
+    if (!session) return;
+
+    const appId = Number(req.params.appId);
+    if (!Number.isInteger(appId) || appId <= 0) {
+      res.status(400).json({ message: 'A valid appId is required.' });
+      return;
+    }
+
+    try {
+      const refreshed = await withRefresh(session, (accessToken) => installApplicationUpstream(accessToken, appId));
+      writeSession(res, refreshed.session);
+      res.json({ result: refreshed.result });
+    } catch (error) {
+      if (!isCookieAuthToken(session.accessToken)) {
+        clearSession(res);
+      }
+      next(error);
+    }
+  });
+
+  app.post('/library/apps/:appId/uninstall', async (req, res, next) => {
+    const session = requireSession(req, res);
+    if (!session) return;
+
+    const appId = Number(req.params.appId);
+    if (!Number.isInteger(appId) || appId <= 0) {
+      res.status(400).json({ message: 'A valid appId is required.' });
+      return;
+    }
+
+    try {
+      const refreshed = await withRefresh(session, (accessToken) => uninstallApplicationUpstream(accessToken, appId));
+      writeSession(res, refreshed.session);
+      res.json({ result: refreshed.result });
+    } catch (error) {
+      if (!isCookieAuthToken(session.accessToken)) {
+        clearSession(res);
+      }
+      next(error);
+    }
+  });
+
+  app.get('/library/sync/:platform', async (req, res, next) => {
+    const session = requireSession(req, res);
+    if (!session) return;
+
+    try {
+      const refreshed = await withRefresh(session, (accessToken) => getLastSynchronizeUpstream(accessToken, req.params.platform));
+      writeSession(res, refreshed.session);
+      res.json({ result: refreshed.result });
+    } catch (error) {
+      if (!isCookieAuthToken(session.accessToken)) {
+        clearSession(res);
+      }
+      next(error);
+    }
+  });
+
+  app.post('/library/sync/:platform', async (req, res, next) => {
+    const session = requireSession(req, res);
+    if (!session) return;
+
+    try {
+      const refreshed = await withRefresh(session, (accessToken) => synchronizeInstalledApplicationUpstream(accessToken, req.params.platform));
+      writeSession(res, refreshed.session);
+      res.json({ result: refreshed.result });
+    } catch (error) {
+      if (!isCookieAuthToken(session.accessToken)) {
+        clearSession(res);
+      }
       next(error);
     }
   });
@@ -1106,6 +1464,143 @@ export function createBridgeApp() {
 
   app.post('/api/stream/launch', handleStreamLaunch);
   app.post('/stream/launch', handleStreamLaunch);
+
+  app.get('/stream/sessions/active', async (req, res, next) => {
+    const session = requireSession(req, res);
+    if (!session) return;
+
+    try {
+      const refreshed = await withRefresh(session, getActiveSessionsUpstream);
+      writeSession(res, refreshed.session);
+      res.json({ sessions: refreshed.result });
+    } catch (error) {
+      if (!isCookieAuthToken(session.accessToken)) {
+        clearSession(res);
+      }
+      next(error);
+    }
+  });
+
+  app.get('/stream/sessions/last', async (req, res, next) => {
+    const session = requireSession(req, res);
+    if (!session) return;
+
+    try {
+      const refreshed = await withRefresh(session, getLastSessionUpstream);
+      writeSession(res, refreshed.session);
+      res.json({ session: refreshed.result });
+    } catch (error) {
+      if (!isCookieAuthToken(session.accessToken)) {
+        clearSession(res);
+      }
+      next(error);
+    }
+  });
+
+  app.get('/stream/sessions/live', async (req, res, next) => {
+    const session = requireSession(req, res);
+    if (!session) return;
+
+    try {
+      const refreshed = await withRefresh(session, getLastSessionLiveUpstream);
+      writeSession(res, refreshed.session);
+      res.json({ session: refreshed.result });
+    } catch (error) {
+      if (!isCookieAuthToken(session.accessToken)) {
+        clearSession(res);
+      }
+      next(error);
+    }
+  });
+
+  app.get('/stream/sessions/:sessionId/details', async (req, res, next) => {
+    const session = requireSession(req, res);
+    if (!session) return;
+
+    if (!req.params.sessionId) {
+      res.status(400).json({ message: 'A sessionId is required.' });
+      return;
+    }
+
+    try {
+      const refreshed = await withRefresh(session, (accessToken) => (
+        getStreamingSessionDetailsUpstream(accessToken, req.params.sessionId)
+      ));
+      writeSession(res, refreshed.session);
+      res.json({ session: refreshed.result });
+    } catch (error) {
+      if (!isCookieAuthToken(session.accessToken)) {
+        clearSession(res);
+      }
+      next(error);
+    }
+  });
+
+  app.get('/stream/gateways', async (req, res, next) => {
+    const session = requireSession(req, res);
+    if (!session) return;
+
+    try {
+      const refreshed = await withRefresh(session, getStreamingGatewaysUpstream);
+      writeSession(res, refreshed.session);
+      res.json({ gateways: refreshed.result });
+    } catch (error) {
+      if (!isCookieAuthToken(session.accessToken)) {
+        clearSession(res);
+      }
+      next(error);
+    }
+  });
+
+  app.post('/stream/dequeue', async (req, res, next) => {
+    const session = requireSession(req, res);
+    if (!session) return;
+
+    try {
+      const refreshed = await withRefresh(session, dequeueStreamingSessionUpstream);
+      writeSession(res, refreshed.session);
+      res.json({ result: refreshed.result });
+    } catch (error) {
+      if (!isCookieAuthToken(session.accessToken)) {
+        clearSession(res);
+      }
+      next(error);
+    }
+  });
+
+  app.post('/stream/session/log', async (req, res, next) => {
+    const session = requireSession(req, res);
+    if (!session) return;
+
+    try {
+      const payload = req.body && typeof req.body === 'object' ? req.body as Record<string, unknown> : {};
+      const refreshed = await withRefresh(session, (accessToken) => postStreamingSessionLogUpstream(accessToken, payload));
+      writeSession(res, refreshed.session);
+      res.json({ result: refreshed.result });
+    } catch (error) {
+      if (!isCookieAuthToken(session.accessToken)) {
+        clearSession(res);
+      }
+      next(error);
+    }
+  });
+
+  app.post('/stream/session/evaluation', async (req, res, next) => {
+    const session = requireSession(req, res);
+    if (!session) return;
+
+    try {
+      const payload = req.body && typeof req.body === 'object' ? req.body as Record<string, unknown> : {};
+      const refreshed = await withRefresh(session, (accessToken) => submitStreamingSessionEvaluationUpstream(accessToken, payload));
+      writeSession(res, refreshed.session);
+      res.json({ result: refreshed.result });
+    } catch (error) {
+      if (!isCookieAuthToken(session.accessToken)) {
+        clearSession(res);
+      }
+      next(error);
+    }
+  });
 
   const indexFile = path.join(serverConfig.distDir, 'index.html');
   if (fs.existsSync(indexFile)) {

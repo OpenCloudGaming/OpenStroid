@@ -1,9 +1,21 @@
-import type { StreamClientConfig } from '../types';
+import type { StreamClientConfig, StreamRealtimeStats } from '../types';
+import {
+  MIN_STREAM_BITRATE_MBPS,
+  resolutionForPreset,
+  type StreamEncodingPreset,
+  type StreamQualityPreset,
+  type StreamResolutionPreset,
+} from './streamOptions';
 
 const DEFAULT_ICE_SERVERS: RTCIceServer[] = [
   { urls: 'stun:stun.l.google.com:19302' },
   { urls: 'stun:stun2.l.google.com:19302' },
 ];
+
+const LOW_LATENCY_MOUSE_MOVE_DELAY_MS = 8;
+const POINTER_LOCK_REQUEST_COOLDOWN_MS = 350;
+const POINTER_LOCK_REQUEST_FALLBACK_TIMEOUT_MS = 500;
+const CURSOR_MISS_COOLDOWN_MS = 5000;
 
 type StreamStatus =
   | 'Preparing'
@@ -17,6 +29,7 @@ type StreamStatus =
 type LogHandler = (message: string) => void;
 type StatusHandler = (status: StreamStatus | string) => void;
 export type StreamMouseMode = 'absolute' | 'relative';
+type StreamVideoCodec = 'h264' | 'av1';
 
 export interface StreamCursorState {
   x: number;
@@ -30,19 +43,7 @@ export interface StreamCursorState {
 
 type CursorHandler = (cursor: StreamCursorState) => void;
 type MouseModeHandler = (mode: StreamMouseMode) => void;
-type InputHandlerName =
-  | 'click'
-  | 'contextmenu'
-  | 'mousemove'
-  | 'mousedown'
-  | 'mouseup'
-  | 'wheel'
-  | 'keydown'
-  | 'keyup'
-  | 'blur'
-  | 'visibilitychange'
-  | 'pointerlockchange'
-  | 'pointerlockerror';
+type StatsHandler = (stats: StreamRealtimeStats) => void;
 
 interface StreamClientOptions {
   videoElement: HTMLVideoElement;
@@ -51,6 +52,40 @@ interface StreamClientOptions {
   onStatus?: StatusHandler;
   onCursor?: CursorHandler;
   onMouseMode?: MouseModeHandler;
+  onStats?: StatsHandler;
+}
+
+interface StreamRuntimeSettings {
+  maxBitrateMbps: number;
+  maxFramerate: 60 | 120;
+  resolution: StreamResolutionPreset;
+  encoding: StreamEncodingPreset;
+  fsrEnabled: boolean;
+  microphoneEnabled: boolean;
+  hdrEnabled: boolean;
+  fillerEnabled: boolean;
+  quality: StreamQualityPreset;
+}
+
+interface VideoSurfaceMetrics {
+  left: number;
+  top: number;
+  cssWidth: number;
+  cssHeight: number;
+  visualSurfaceWidth: number;
+  visualSurfaceHeight: number;
+  surfaceWidth: number;
+  surfaceHeight: number;
+  movementScaleX: number;
+  movementScaleY: number;
+  devicePixelRatio: number;
+}
+
+interface PendingMouseMove {
+  x: number;
+  y: number;
+  surfaceWidth: number;
+  surfaceHeight: number;
 }
 
 type GatewayCandidate = string | { address?: unknown; gw?: unknown; gateway?: unknown; url?: unknown };
@@ -136,21 +171,71 @@ function connectionType() {
   return connection?.effectiveType ?? 'unknown';
 }
 
-function numberFromMessage(value: unknown) {
-  return typeof value === 'number' && Number.isFinite(value) ? value : null;
+let av1SupportPromise: Promise<boolean> | null = null;
+
+async function supportsAv1Decoding() {
+  if (!navigator.mediaCapabilities?.decodingInfo) return false;
+  av1SupportPromise ??= navigator.mediaCapabilities.decodingInfo({
+    type: 'media-source',
+    video: {
+      contentType: 'video/webm; codecs=av01.0.08M.08',
+      width: Math.max(window.screen.width || 0, window.innerWidth || 0, 1280),
+      height: Math.max(window.screen.height || 0, window.innerHeight || 0, 720),
+      bitrate: 40_000_000,
+      framerate: 60,
+    },
+  }).then((result) => Boolean(result.supported && result.smooth)).catch(() => false);
+  return av1SupportPromise;
 }
 
-function boolFromMessage(value: unknown, fallback: boolean) {
-  return typeof value === 'boolean' ? value : fallback;
+function numberFromMessage(value: unknown) {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null;
 }
 
 function clamp01(value: number) {
   return Math.min(Math.max(value, 0), 1);
 }
 
+function surfaceAspect(width: number, height: number) {
+  return width > 0 && height > 0 ? width / height : 0;
+}
+
+function isAspectCompatible(width: number, height: number, targetAspect: number) {
+  const aspect = surfaceAspect(width, height);
+  if (!aspect || !targetAspect) return true;
+  return Math.abs(aspect - targetAspect) / targetAspect <= 0.08;
+}
+
+function isPromiseLike(value: unknown): value is Promise<void> {
+  return Boolean(value) && typeof (value as Promise<void>).then === 'function';
+}
+
+function toLandscapeResolution(width: number, height: number) {
+  const normalizedWidth = Math.max(Number(width) || 0, Number(height) || 0);
+  const normalizedHeight = Math.min(Number(width) || 0, Number(height) || 0);
+
+  if (!Number.isFinite(normalizedWidth) || !Number.isFinite(normalizedHeight) || normalizedWidth <= 0 || normalizedHeight <= 0) {
+    return { width: 1920, height: 1080 };
+  }
+
+  return {
+    width: Math.round(normalizedWidth),
+    height: Math.round(normalizedHeight),
+  };
+}
+
 function base64ToBytes(value: string) {
   const binary = atob(value);
   return Uint8Array.from(binary, (char) => char.charCodeAt(0));
+}
+
+function bytesToBase64(bytes: Uint8Array) {
+  let binary = '';
+  const chunkSize = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
+  }
+  return btoa(binary);
 }
 
 async function inflateCursorResource(resource: string) {
@@ -172,24 +257,16 @@ async function inflateCursorResource(resource: string) {
   return null;
 }
 
-async function cursorResourceToImageUrl(resource: unknown, zipped: unknown) {
+// Returns the raw CUR resource as plain base64 (the official client feeds this
+// directly into a `url(data:application/cur;base64,...)` CSS cursor value).
+async function decodeCursorResource(resource: unknown, zipped: unknown) {
   if (typeof resource !== 'string' || !resource.trim()) return null;
   const trimmed = resource.trim();
 
-  if (trimmed.startsWith('data:image/')) return trimmed;
+  if (zipped !== true) return trimmed;
 
-  if (zipped === true) {
-    const inflated = await inflateCursorResource(trimmed);
-    if (!inflated) return null;
-    const asText = new TextDecoder().decode(inflated);
-    if (asText.trim().startsWith('<svg')) {
-      return `data:image/svg+xml;base64,${btoa(asText)}`;
-    }
-    return URL.createObjectURL(new Blob([inflated], { type: 'image/x-icon' }));
-  }
-
-  if (trimmed.startsWith('<svg')) return `data:image/svg+xml;base64,${btoa(trimmed)}`;
-  return `data:image/x-icon;base64,${trimmed}`;
+  const inflated = await inflateCursorResource(trimmed);
+  return inflated ? bytesToBase64(inflated) : null;
 }
 
 function normalizeWebRtcApiHost(gatewayHost: string) {
@@ -335,24 +412,53 @@ export class OpenStroidStreamClient {
   private readonly onStatus: StatusHandler;
   private readonly onCursor: CursorHandler;
   private readonly onMouseMode: MouseModeHandler;
+  private readonly onStats: StatsHandler;
   private ws: WebSocket | null = null;
   private pc: RTCPeerConnection | null = null;
   private dataChannel: RTCDataChannel | null = null;
+  private currentConfig: StreamClientConfig | null = null;
   private sessionId = '';
   private sessionQuery = '';
   private gatewayHost = '';
   private webrtcApiBase = '';
   private peerId = '';
-  private preferredCodec = 'auto';
+  private preferredCodec: StreamEncodingPreset = 'h264';
+  private activeCodec: StreamVideoCodec = 'h264';
+  private gatewayCodec = '';
   private gateways: unknown[] = [];
   private remoteIceTimer: number | null = null;
   private statsTimer: number | null = null;
   private remoteIceDedup = new Set<string>();
-  private cursorImages = new Map<string, string | null>();
+
+  // === Mouse / cursor pipeline state (mirrors the official EventHandler + CursorModeManager, Legacy mode) ===
+  // 1 = inactive, 2 = active + absolute transport, 3 = active + relative transport.
+  private cursorState: 1 | 2 | 3 = 1;
+  private lastCursorState: 0 | 2 | 3 = 0;
+  private transportMode: StreamMouseMode = 'absolute';
+  private cursorPosition = { x: 0.5, y: 0.5 };
+  private pendingActivationPosition: { x: number; y: number } | null = null;
+  private pendingActivationPositionRequiresSync = false;
+  private relativeMovementRemainder = { x: 0, y: 0 };
+  private pendingMouseMove: PendingMouseMove | null = null;
+  private pendingMovementX = 0;
+  private pendingMovementY = 0;
+  private mouseMoveRaf: number | null = null;
+  private mouseMoveTimer: number | null = null;
+  private videoSurfaceMetrics: VideoSurfaceMetrics | null = null;
+  private videoSurfaceMetricsDirty = true;
+  private pointerLockRequestedAt = 0;
+  private isPointerLockRequestPending = false;
+  private pointerLockRequestTimeoutIds = new Set<number>();
+  // Cursor resources are raw CUR base64, applied via CSS url(data:application/cur;base64,...).
+  private cursorResources = new Map<string, string>();
+  private cursorMissCooldowns = new Map<string, number>();
+  private currentCursorName = 'default';
+  private lastCursorIconName: string | null = null;
+  private baseInputInstalled = false;
+  private mouseInputInstalled = false;
+
   private cursor: StreamCursorState = { x: 0.5, y: 0.5, visible: false, imageUrl: null };
-  private mouseMode: StreamMouseMode = 'absolute';
   private pressedKeys = new Set<number>();
-  private inputInstalled = false;
   private eventCount = 0;
   private idCmdCounter = 0;
   private statsPrev: {
@@ -363,7 +469,17 @@ export class OpenStroidStreamClient {
     packetsReceived: number;
     packetsLost: number;
   } | null = null;
-  private handlers: Partial<Record<InputHandlerName, EventListener>> = {};
+  private runtimeSettings: StreamRuntimeSettings = {
+    maxBitrateMbps: 20,
+    maxFramerate: 60,
+    resolution: 'auto',
+    encoding: 'h264',
+    fsrEnabled: false,
+    microphoneEnabled: false,
+    hdrEnabled: false,
+    fillerEnabled: false,
+    quality: 'auto',
+  };
 
   constructor(options: StreamClientOptions) {
     this.videoElement = options.videoElement;
@@ -372,33 +488,94 @@ export class OpenStroidStreamClient {
     this.onStatus = options.onStatus ?? (() => undefined);
     this.onCursor = options.onCursor ?? (() => undefined);
     this.onMouseMode = options.onMouseMode ?? (() => undefined);
+    this.onStats = options.onStats ?? (() => undefined);
   }
 
-  async setMouseMode(mode: StreamMouseMode) {
-    this.mouseMode = mode;
-    this.onMouseMode(mode);
-    this.videoElement.focus();
-
-    if (mode === 'relative') {
-      await this.requestPointerLock();
-      this.cursor = { ...this.cursor, visible: false };
-      this.onCursor(this.cursor);
-      return;
-    }
-
-    if (document.pointerLockElement === this.videoElement) {
-      document.exitPointerLock?.();
-    }
-    this.cursor = { ...this.cursor, visible: true };
-    this.onCursor(this.cursor);
+  setAudioVolume(volume: number) {
+    const normalized = Math.min(Math.max(Math.round(volume), 0), 100);
+    this.audioElement.volume = normalized / 100;
+    this.audioElement.muted = normalized === 0;
+    return normalized;
   }
 
-  async toggleMouseMode() {
-    await this.setMouseMode(this.mouseMode === 'relative' ? 'absolute' : 'relative');
+  setMuted(muted: boolean) {
+    this.audioElement.muted = muted;
+    return this.audioElement.muted;
+  }
+
+  setQuality(quality: StreamQualityPreset) {
+    this.runtimeSettings.quality = quality;
+  }
+
+  setMaxBitrateMbps(value: number) {
+    const maxBitrateMbps = Math.max(Math.round(value), MIN_STREAM_BITRATE_MBPS);
+    this.runtimeSettings.maxBitrateMbps = maxBitrateMbps;
+    this.sendEvent({
+      type: 'stream',
+      action: 'bitrate_max',
+      value: maxBitrateMbps * 1_000_000,
+    });
+    this.log(`Max bitrate set to ${maxBitrateMbps} Mbps`);
+    return maxBitrateMbps;
+  }
+
+  setMaxFramerate(value: number) {
+    const maxFramerate = value >= 120 ? 120 : 60;
+    this.runtimeSettings.maxFramerate = maxFramerate;
+    this.sendEvent({ type: 'stream', action: 'refreshRate', value: maxFramerate });
+    this.log(`Max refresh rate set to ${maxFramerate} FPS`);
+    return maxFramerate;
+  }
+
+  setResolutionPreset(value: StreamResolutionPreset) {
+    this.runtimeSettings.resolution = value;
+    const resolution = this.resolveResolution();
+    this.sendEvent({ type: 'stream', action: 'screenSize', value: resolution });
+    this.invalidateVideoSurfaceMetrics();
+    this.log(`Resolution set to ${value === 'auto' ? `auto (${resolution.width}x${resolution.height})` : `${resolution.width}x${resolution.height}`}`);
+    return resolution;
+  }
+
+  setEncoding(value: StreamEncodingPreset) {
+    this.runtimeSettings.encoding = value;
+    this.preferredCodec = value;
+    this.log(`Encoding set to ${value === 'h264' ? 'H.264' : value.toUpperCase()}`);
+    return value;
+  }
+
+  setFsrEnabled(enabled: boolean) {
+    this.runtimeSettings.fsrEnabled = enabled;
+    this.sendEvent({ type: 'stream', action: 'fsr', value: enabled });
+    this.log(`FSR ${enabled ? 'enabled' : 'disabled'}`);
+  }
+
+  setMicrophoneEnabled(enabled: boolean) {
+    this.runtimeSettings.microphoneEnabled = enabled;
+    this.sendEvent({ type: 'settings', action: 'microphone', value: enabled });
+    this.log(`Microphone ${enabled ? 'enabled' : 'disabled'}`);
+  }
+
+  sendClipboardPaste(text: string) {
+    if (!text) return;
+    this.sendEvent({ type: 'clipboard', action: 'paste', value: text });
+    this.log(`Sent clipboard paste payload length=${text.length}`);
+  }
+
+  getRuntimeSettings() {
+    return { ...this.runtimeSettings };
+  }
+
+  async reconnect() {
+    if (!this.currentConfig) {
+      throw new Error('No previous stream launch config is available.');
+    }
+    this.log('Manual reconnect requested');
+    await this.connect(this.currentConfig);
   }
 
   async connect(config: StreamClientConfig) {
     await this.disconnect(true);
+    this.currentConfig = config;
     this.log(`Launch config: session=${config.sessionId} gateways=${config.gateways?.length ?? 0} queries=${config.sessionQueries?.length ?? 0}`);
     const queries = (config.sessionQueries ?? []).filter((query) => typeof query === 'string' && query.trim());
     if (config.sessionQuery) queries.unshift(config.sessionQuery);
@@ -412,7 +589,7 @@ export class OpenStroidStreamClient {
 
     this.sessionId = config.sessionId || sessionIdFromQuery(query);
     this.sessionQuery = query;
-    this.preferredCodec = config.preferredCodec ?? 'auto';
+    this.preferredCodec = this.runtimeSettings.encoding;
     this.gateways = config.gateways ?? [];
 
     this.setStatus('Preparing');
@@ -422,15 +599,12 @@ export class OpenStroidStreamClient {
     this.log(`Resolved gateway ${this.gatewayHost}; queryLength=${this.sessionQuery.length}`);
 
     await this.openControlWebSocket();
-    this.installInputHandlers();
+    this.installBaseInputHandlers();
   }
 
   async disconnect(silent = false) {
-    this.releasePressedKeys('disconnect');
-    if (document.pointerLockElement === this.videoElement) {
-      document.exitPointerLock?.();
-    }
-    this.uninstallInputHandlers();
+    this.fullInputRelease('disconnect');
+    this.uninstallBaseInputHandlers();
     this.stopStatsLoop();
     this.stopRemoteIcePolling();
 
@@ -453,10 +627,18 @@ export class OpenStroidStreamClient {
     this.peerId = '';
     this.remoteIceDedup.clear();
     this.statsPrev = null;
-    this.mouseMode = 'absolute';
-    this.onMouseMode(this.mouseMode);
-    this.cursor = { x: 0.5, y: 0.5, visible: false, imageUrl: null };
-    this.onCursor(this.cursor);
+
+    this.transportMode = 'absolute';
+    this.cursorState = 1;
+    this.lastCursorState = 0;
+    this.cursorPosition = { x: 0.5, y: 0.5 };
+    this.currentCursorName = 'default';
+    this.lastCursorIconName = null;
+    this.cursorMissCooldowns.clear();
+    this.videoSurfaceMetrics = null;
+    this.videoSurfaceMetricsDirty = true;
+    this.onMouseMode(this.transportMode);
+    this.emitCursorState();
     if (!silent) this.setStatus('Disconnected');
   }
 
@@ -475,19 +657,33 @@ export class OpenStroidStreamClient {
   }
 
   private async selectedCodec() {
-    if (this.preferredCodec === 'av1' || this.preferredCodec === 'h264') return this.preferredCodec;
+    if (this.preferredCodec === 'h264') return 'h264';
+    if (await supportsAv1Decoding()) return 'av1';
+    if (this.preferredCodec === 'av1') this.log('AV1 is not supported by this browser; falling back to H.264');
     return 'h264';
+  }
+
+  private resolveResolution() {
+    const preset = resolutionForPreset(this.runtimeSettings.resolution);
+    if (preset?.width && preset.height) {
+      return { width: preset.width, height: preset.height };
+    }
+
+    return toLandscapeResolution(
+      Math.max(1280, Math.round(window.innerWidth * window.devicePixelRatio)),
+      Math.max(720, Math.round(window.innerHeight * window.devicePixelRatio)),
+    );
   }
 
   private async openControlWebSocket() {
     const codec = await this.selectedCodec();
-    const width = Math.max(1280, Math.round(window.innerWidth * window.devicePixelRatio));
-    const height = Math.max(720, Math.round(window.innerHeight * window.devicePixelRatio));
+    this.activeCodec = codec;
+    const { width, height } = this.resolveResolution();
     const params = new URLSearchParams({
       x: String(width),
       y: String(height),
       lang: 'en',
-      refreshRate: '60',
+      refreshRate: String(this.runtimeSettings.maxFramerate),
       rtcEngine: 'webrtc',
       clientType: 'web',
       devType: 'desktop',
@@ -498,7 +694,7 @@ export class OpenStroidStreamClient {
     const wsUrl = `wss://${this.gatewayHost}/?${this.sessionQuery}&${params.toString()}`;
 
     this.setStatus('Opening control socket');
-    this.log(`Opening control socket on ${this.gatewayHost}; codec=${codec}`);
+    this.log(`Opening control socket on ${this.gatewayHost}; codec=${codec} resolution=${width}x${height}`);
     await new Promise<void>((resolve, reject) => {
       let settled = false;
       const ws = new WebSocket(wsUrl);
@@ -542,13 +738,27 @@ export class OpenStroidStreamClient {
       return;
     }
 
+    if (message.type === 'stream' && message.action === 'setstatus') {
+      const value = message.value && typeof message.value === 'object'
+        ? message.value as Record<string, unknown>
+        : {};
+      if (typeof value.codec === 'string') this.gatewayCodec = value.codec;
+      if (typeof value.hdr === 'boolean') this.runtimeSettings.hdrEnabled = value.hdr;
+      if (typeof value.framerate === 'number') {
+        this.runtimeSettings.maxFramerate = value.framerate >= 120 ? 120 : 60;
+      }
+      if (typeof value.fsr === 'boolean') this.runtimeSettings.fsrEnabled = value.fsr;
+      this.log(`Gateway status updated codec=${this.gatewayCodec || 'unknown'} fps=${this.runtimeSettings.maxFramerate}`);
+      return;
+    }
+
     if (message.type === 'cursor') {
       await this.handleRemoteCursor(message);
       return;
     }
 
-    if (message.type === 'mouse') {
-      this.handleRemoteMouse(message);
+    if (message.type === 'mouse' || message.type === 'keyboard') {
+      // Input echoes are only used for RTT measurement by the official client.
       return;
     }
 
@@ -560,122 +770,809 @@ export class OpenStroidStreamClient {
     this.log(`Control: ${JSON.stringify(message).slice(0, 300)}`);
   }
 
+  // === Server-driven cursor state (official CursorHandler.validateCursorDataJSON) ===
+
   private async handleRemoteCursor(message: Record<string, unknown>) {
-    const name = typeof message.name === 'string' ? message.name : this.cursor.name;
-    let imageUrl = name ? this.cursorImages.get(name) : this.cursor.imageUrl;
+    const name = typeof message.name === 'string' && message.name ? message.name : null;
 
     if (name && message.resource) {
-      imageUrl = await cursorResourceToImageUrl(message.resource, message.zipped);
-      this.cursorImages.set(name, imageUrl);
+      const resource = await decodeCursorResource(message.resource, message.zipped);
+      if (resource) {
+        this.cursorResources.set(name, resource);
+        this.cursorMissCooldowns.delete(name);
+      }
     }
 
-    const x = numberFromMessage(message.X) ?? this.cursor.x;
-    const y = numberFromMessage(message.Y) ?? this.cursor.y;
-    this.cursor = {
-      x,
-      y,
-      visible: this.mouseMode === 'relative' ? false : boolFromMessage(message.isVisible, this.cursor.visible),
-      imageUrl: imageUrl ?? null,
-      offsetX: numberFromMessage(message.offsetX) ?? this.cursor.offsetX ?? 0,
-      offsetY: numberFromMessage(message.offsetY) ?? this.cursor.offsetY ?? 0,
-      name,
-    };
-    this.onCursor(this.cursor);
-  }
+    this.syncServerCursorState(message);
 
-  private handleRemoteMouse(message: Record<string, unknown>) {
-    const x = numberFromMessage(message.X);
-    const y = numberFromMessage(message.Y);
-    const offsetX = numberFromMessage(message.offsetX);
-    const offsetY = numberFromMessage(message.offsetY);
-    const isPointerLocked = this.isRelativePointerLocked();
-    const isRemoteVisible = boolFromMessage(message.isVisible, this.cursor.visible);
-    const rect = this.getVideoContentRect();
-    const nextX =
-      x ??
-      (isPointerLocked && offsetX !== null ? clamp01(this.cursor.x + offsetX / Math.max(rect.width, 1)) : this.cursor.x);
-    const nextY =
-      y ??
-      (isPointerLocked && offsetY !== null ? clamp01(this.cursor.y + offsetY / Math.max(rect.height, 1)) : this.cursor.y);
-
-    this.cursor = {
-      ...this.cursor,
-      x: nextX,
-      y: nextY,
-      visible: this.mouseMode === 'relative' ? false : isRemoteVisible,
-      offsetX: offsetX ?? this.cursor.offsetX ?? 0,
-      offsetY: offsetY ?? this.cursor.offsetY ?? 0,
-    };
-    this.onCursor(this.cursor);
-  }
-
-  private getVideoContentRect() {
-    const rect = this.videoElement.getBoundingClientRect();
-    const videoWidth = this.videoElement.videoWidth || 16;
-    const videoHeight = this.videoElement.videoHeight || 9;
-    const frameRatio = rect.width / Math.max(rect.height, 1);
-    const videoRatio = videoWidth / Math.max(videoHeight, 1);
-
-    if (videoRatio > frameRatio) {
-      const height = rect.width / videoRatio;
-      return {
-        left: rect.left,
-        top: rect.top + (rect.height - height) / 2,
-        width: rect.width,
-        height,
-      };
+    if (name) {
+      this.changeSessionCursor(name);
+    } else if (this.cursorState > 1) {
+      this.refreshSessionCursor();
     }
 
-    const width = rect.height * videoRatio;
-    return {
-      left: rect.left + (rect.width - width) / 2,
-      top: rect.top,
-      width,
-      height: rect.height,
-    };
+    this.emitCursorState();
   }
 
-  private updateCursorFromMouseEvent(mouseEvent: MouseEvent) {
-    const rect = this.getVideoContentRect();
-    const isPointerLocked = this.isRelativePointerLocked();
-    this.cursor = {
-      ...this.cursor,
-      x: isPointerLocked
-        ? clamp01(this.cursor.x + (mouseEvent.movementX || 0) / Math.max(rect.width, 1))
-        : clamp01((mouseEvent.clientX - rect.left) / Math.max(rect.width, 1)),
-      y: isPointerLocked
-        ? clamp01(this.cursor.y + (mouseEvent.movementY || 0) / Math.max(rect.height, 1))
-        : clamp01((mouseEvent.clientY - rect.top) / Math.max(rect.height, 1)),
-      visible: this.mouseMode !== 'relative',
-      offsetX: mouseEvent.movementX || 0,
-      offsetY: mouseEvent.movementY || 0,
-    };
-    this.onCursor(this.cursor);
-    return isPointerLocked;
-  }
+  // Mirrors CursorModeManager.syncServerCursorState (Legacy branch).
+  private syncServerCursorState(message: Record<string, unknown>) {
+    const explicitX = numberFromMessage(message.X);
+    const explicitY = numberFromMessage(message.Y);
+    const receivedExplicitPosition = explicitX !== null || explicitY !== null;
+    const previousTransport = this.transportMode;
 
-  private isRelativePointerLocked() {
-    return this.mouseMode === 'relative' && document.pointerLockElement === this.videoElement;
-  }
+    if (typeof message.isVisible === 'boolean') {
+      this.setTransportMode(message.isVisible ? 'absolute' : 'relative');
+    }
 
-  private async requestPointerLock() {
-    const requestPointerLock = this.videoElement.requestPointerLock?.bind(this.videoElement);
-    if (!requestPointerLock) return;
+    let nextX = explicitX ?? this.cursorPosition.x;
+    let nextY = explicitY ?? this.cursorPosition.y;
 
-    try {
-      const result = requestPointerLock({ unadjustedMovement: true } as PointerLockOptions);
-      if (result instanceof Promise) await result;
-    } catch {
-      try {
-        const result = requestPointerLock();
-        if (result instanceof Promise) await result;
-      } catch (error) {
-        this.mouseMode = 'absolute';
-        this.onMouseMode(this.mouseMode);
-        this.log(`Pointer lock request failed: ${error instanceof Error ? error.message : String(error)}`);
+    if (receivedExplicitPosition && this.pendingActivationPosition) {
+      this.consumePendingActivationPosition();
+    }
+
+    const pendingActivationPosition = this.pendingActivationPosition;
+    const switchedToAbsolute = previousTransport === 'relative' && this.transportMode === 'absolute';
+    const shouldApplyPendingActivationPosition =
+      this.cursorState !== 1 &&
+      this.transportMode === 'absolute' &&
+      pendingActivationPosition !== null &&
+      !receivedExplicitPosition &&
+      (switchedToAbsolute || this.pendingActivationPositionRequiresSync);
+
+    if (shouldApplyPendingActivationPosition && pendingActivationPosition) {
+      nextX = pendingActivationPosition.x;
+      nextY = pendingActivationPosition.y;
+      this.consumePendingActivationPosition();
+    } else if (switchedToAbsolute) {
+      if (explicitX === null) nextX = 0.5;
+      if (explicitY === null) nextY = 0.5;
+    }
+
+    this.cursorPosition = { x: nextX, y: nextY };
+    this.lastCursorState = this.getCursorStateForActiveCapture();
+
+    if (this.cursorState !== 1) {
+      this.cursorState = this.getCursorStateForActiveCapture();
+      if (this.shouldUsePointerLock()) {
+        this.requestPointerLock('server-state');
+      } else {
+        this.exitPointerLockIfHeld();
       }
     }
   }
+
+  // === Legacy cursor rendering (official CursorHandler.changeSessionCursor) ===
+
+  private refreshSessionCursor() {
+    this.changeSessionCursor(this.lastCursorIconName ?? 'default');
+  }
+
+  private changeSessionCursor(cursorName: string) {
+    if (this.cursorState < 2) {
+      this.currentCursorName = 'default';
+      this.videoElement.style.cursor = 'default';
+      return;
+    }
+
+    const resolvedCursorName = cursorName || 'default';
+    this.currentCursorName = resolvedCursorName;
+
+    if (resolvedCursorName === 'none') {
+      this.videoElement.style.cursor = 'none';
+      return;
+    }
+
+    if (resolvedCursorName === 'default') {
+      this.videoElement.style.cursor = this.shouldHideLocalCursor(resolvedCursorName) ? 'none' : 'default';
+      return;
+    }
+
+    const cursorResource = this.cursorResources.get(resolvedCursorName) ?? null;
+    if (cursorResource) {
+      this.lastCursorIconName = resolvedCursorName;
+      this.cursorMissCooldowns.delete(resolvedCursorName);
+    } else {
+      this.requestMissingCursor(resolvedCursorName);
+    }
+
+    if (this.shouldHideLocalCursor(resolvedCursorName)) {
+      this.videoElement.style.cursor = 'none';
+      return;
+    }
+
+    // Official Legacy path keeps the previous cursor while a missed resource is in flight.
+    if (cursorResource) {
+      this.videoElement.style.cursor = `url(data:application/cur;base64,${cursorResource}),auto`;
+    }
+  }
+
+  private shouldHideLocalCursor(cursorName: string) {
+    if (this.cursorState === 1) return false;
+    if (cursorName === 'none') return true;
+    return this.transportMode === 'relative';
+  }
+
+  private requestMissingCursor(cursorName: string) {
+    const timestamp = Date.now();
+    const lastRequestAt = this.cursorMissCooldowns.get(cursorName) ?? 0;
+    if (timestamp - lastRequestAt < CURSOR_MISS_COOLDOWN_MS) return;
+    this.cursorMissCooldowns.set(cursorName, timestamp);
+    this.sendInputEvent({ type: 'cursor', action: 'missed', name: cursorName });
+  }
+
+  // The native CSS cursor renders the remote cursor, so `visible` is always false; the
+  // onCursor callback only reports state for optional UI consumers.
+  private emitCursorState() {
+    const resource =
+      this.cursorState === 2 && this.currentCursorName !== 'none' && this.currentCursorName !== 'default'
+        ? this.cursorResources.get(this.currentCursorName) ?? null
+        : null;
+    this.cursor = {
+      x: clamp01(this.cursorPosition.x),
+      y: clamp01(this.cursorPosition.y),
+      visible: false,
+      imageUrl: resource ? `data:application/cur;base64,${resource}` : null,
+      name: this.currentCursorName,
+    };
+    this.onCursor(this.cursor);
+  }
+
+  // === Cursor state machine ===
+
+  private getCursorStateForActiveCapture(): 2 | 3 {
+    return this.transportMode === 'relative' ? 3 : 2;
+  }
+
+  private setTransportMode(mode: StreamMouseMode) {
+    if (this.transportMode === mode) return false;
+    this.transportMode = mode;
+    this.resetRelativeMovementRemainder();
+    this.onMouseMode(mode);
+    return true;
+  }
+
+  private resetRelativeMovementRemainder() {
+    this.relativeMovementRemainder.x = 0;
+    this.relativeMovementRemainder.y = 0;
+  }
+
+  private consumePendingActivationPosition() {
+    const pendingActivationPosition = this.pendingActivationPosition;
+    this.pendingActivationPosition = null;
+    this.pendingActivationPositionRequiresSync = false;
+    return pendingActivationPosition;
+  }
+
+  private captureActivationCursorPosition(event: MouseEvent) {
+    const point = this.buildNormalizedPoint(event.clientX, event.clientY);
+    if (!point) {
+      this.pendingActivationPosition = null;
+      this.pendingActivationPositionRequiresSync = false;
+      return;
+    }
+    this.pendingActivationPosition = { x: clamp01(point.x), y: clamp01(point.y) };
+    this.pendingActivationPositionRequiresSync = true;
+  }
+
+  private activateInput() {
+    const desiredState = this.lastCursorState > 1 ? this.lastCursorState : 2;
+    this.setTransportMode(desiredState === 3 ? 'relative' : 'absolute');
+    this.cursorState = this.getCursorStateForActiveCapture();
+    this.lastCursorState = this.cursorState;
+
+    if (this.pendingActivationPosition && this.transportMode === 'absolute') {
+      this.cursorPosition = { ...this.pendingActivationPosition };
+    }
+
+    if (this.shouldUsePointerLock()) {
+      this.requestPointerLock('activate');
+    } else {
+      this.exitPointerLockIfHeld();
+    }
+
+    this.emitCursorState();
+  }
+
+  private fullInputRelease(reason: string) {
+    this.resetPendingMouseMove();
+    this.releasePressedKeys(reason);
+    this.lastCursorState = this.getCursorStateForActiveCapture();
+    this.cursorState = 1;
+    this.resetRelativeMovementRemainder();
+    this.pendingActivationPosition = null;
+    this.pendingActivationPositionRequiresSync = false;
+    this.isPointerLockRequestPending = false;
+    this.clearPointerLockRequestTimeouts();
+    this.exitPointerLockIfHeld();
+    this.uninstallMouseInputHandlers();
+    this.refreshSessionCursor();
+    this.emitCursorState();
+  }
+
+  // === Input activation / listener management ===
+
+  private handleVideoClick = (event: MouseEvent) => {
+    this.videoElement.focus();
+    if (this.cursorState !== 1) return;
+    this.captureActivationCursorPosition(event);
+    this.initMouseInput();
+  };
+
+  private initMouseInput() {
+    if (this.mouseInputInstalled) {
+      this.activateInput();
+      this.refreshSessionCursor();
+      return;
+    }
+    this.mouseInputInstalled = true;
+
+    // Activation handshake (official initKeyboardAndMouse).
+    this.sendInputEvent({ type: 'cursor', action: 'missed' });
+    this.sendInputEvent({
+      type: 'mouse',
+      action: 'connected',
+      LeftBtnState: false,
+      MiddleBtnState: false,
+      RightBtnState: false,
+    });
+
+    const target = this.videoElement;
+    target.addEventListener('mousemove', this.handleMouseMove);
+    target.addEventListener('mousedown', this.handleMouseButton);
+    target.addEventListener('mouseup', this.handleMouseButton);
+    target.addEventListener('wheel', this.handleWheel, { passive: true });
+    target.addEventListener('contextmenu', this.handleContextMenu);
+
+    this.activateInput();
+    this.refreshSessionCursor();
+    this.log('Mouse input activated');
+  }
+
+  private uninstallMouseInputHandlers() {
+    if (!this.mouseInputInstalled) return;
+    this.mouseInputInstalled = false;
+    const target = this.videoElement;
+    target.removeEventListener('mousemove', this.handleMouseMove);
+    target.removeEventListener('mousedown', this.handleMouseButton);
+    target.removeEventListener('mouseup', this.handleMouseButton);
+    target.removeEventListener('wheel', this.handleWheel);
+    target.removeEventListener('contextmenu', this.handleContextMenu);
+  }
+
+  private installBaseInputHandlers() {
+    if (this.baseInputInstalled) return;
+    this.baseInputInstalled = true;
+    const target = this.videoElement;
+    target.tabIndex = 0;
+
+    target.addEventListener('click', this.handleVideoClick);
+    target.addEventListener('loadedmetadata', this.invalidateVideoSurfaceMetrics);
+    target.addEventListener('resize', this.invalidateVideoSurfaceMetrics);
+    window.addEventListener('resize', this.invalidateVideoSurfaceMetrics);
+    window.addEventListener('scroll', this.invalidateVideoSurfaceMetrics, true);
+    document.addEventListener('fullscreenchange', this.handleFullscreenChange);
+    window.addEventListener('keydown', this.handleKeyDown);
+    window.addEventListener('keyup', this.handleKeyUp);
+    window.addEventListener('focus', this.handleWindowFocus);
+    window.addEventListener('blur', this.handleWindowBlur);
+    window.addEventListener('wheel', this.handlePreventCtrlWheelZoom, { passive: false });
+    document.addEventListener('visibilitychange', this.handleVisibilityChange);
+    document.addEventListener('pointerlockchange', this.handlePointerLockChange);
+    document.addEventListener('pointerlockerror', this.handlePointerLockError);
+
+    this.sendInputEvent({ type: 'keyboard', action: 'connected' });
+  }
+
+  private uninstallBaseInputHandlers() {
+    if (!this.baseInputInstalled) return;
+    this.baseInputInstalled = false;
+    const target = this.videoElement;
+    target.removeEventListener('click', this.handleVideoClick);
+    target.removeEventListener('loadedmetadata', this.invalidateVideoSurfaceMetrics);
+    target.removeEventListener('resize', this.invalidateVideoSurfaceMetrics);
+    window.removeEventListener('resize', this.invalidateVideoSurfaceMetrics);
+    window.removeEventListener('scroll', this.invalidateVideoSurfaceMetrics, true);
+    document.removeEventListener('fullscreenchange', this.handleFullscreenChange);
+    window.removeEventListener('keydown', this.handleKeyDown);
+    window.removeEventListener('keyup', this.handleKeyUp);
+    window.removeEventListener('focus', this.handleWindowFocus);
+    window.removeEventListener('blur', this.handleWindowBlur);
+    window.removeEventListener('wheel', this.handlePreventCtrlWheelZoom);
+    document.removeEventListener('visibilitychange', this.handleVisibilityChange);
+    document.removeEventListener('pointerlockchange', this.handlePointerLockChange);
+    document.removeEventListener('pointerlockerror', this.handlePointerLockError);
+  }
+
+  // === Video surface metrics (official EventHandler video surface metrics) ===
+
+  private invalidateVideoSurfaceMetrics = () => {
+    this.videoSurfaceMetricsDirty = true;
+  };
+
+  private resolveVideoContentSize() {
+    const videoWidth = this.videoElement.videoWidth;
+    const videoHeight = this.videoElement.videoHeight;
+    if (videoWidth > 0 && videoHeight > 0) return { width: videoWidth, height: videoHeight };
+    const resolution = this.resolveResolution();
+    return resolution.width > 0 && resolution.height > 0 ? resolution : null;
+  }
+
+  private resolveInputSurfaceSize(cssWidth: number, cssHeight: number) {
+    const targetAspect = surfaceAspect(cssWidth, cssHeight);
+    const candidates = [
+      this.resolveResolution(),
+      { width: this.videoElement.videoWidth, height: this.videoElement.videoHeight },
+    ];
+
+    for (const candidate of candidates) {
+      const width = Number(candidate.width) || 0;
+      const height = Number(candidate.height) || 0;
+      if (width > 0 && height > 0 && isAspectCompatible(width, height, targetAspect)) {
+        return { width, height };
+      }
+    }
+
+    return null;
+  }
+
+  private refreshVideoSurfaceMetrics(): VideoSurfaceMetrics | null {
+    const rect = this.videoElement.getBoundingClientRect();
+    const devicePixelRatio = window.devicePixelRatio || 1;
+
+    if (!Number.isFinite(rect.width) || !Number.isFinite(rect.height) || rect.width <= 0 || rect.height <= 0) {
+      this.videoSurfaceMetrics = null;
+      this.videoSurfaceMetricsDirty = true;
+      return null;
+    }
+
+    // Letterboxed content rect (CSS px) from the intrinsic video aspect.
+    const contentSize = this.resolveVideoContentSize();
+    const contentAspect = contentSize ? surfaceAspect(contentSize.width, contentSize.height) : 0;
+    const elementAspect = surfaceAspect(rect.width, rect.height);
+    let content = { left: rect.left, top: rect.top, width: rect.width, height: rect.height };
+
+    if (contentAspect && elementAspect && Math.abs(elementAspect - contentAspect) / contentAspect > 0.001) {
+      if (elementAspect > contentAspect) {
+        const width = rect.height * contentAspect;
+        content = { left: rect.left + (rect.width - width) / 2, top: rect.top, width, height: rect.height };
+      } else {
+        const height = rect.width / contentAspect;
+        content = { left: rect.left, top: rect.top + (rect.height - height) / 2, width: rect.width, height };
+      }
+    }
+
+    const visualSurfaceWidth = content.width * devicePixelRatio;
+    const visualSurfaceHeight = content.height * devicePixelRatio;
+    const inputSurface = this.resolveInputSurfaceSize(content.width, content.height) ?? {
+      width: visualSurfaceWidth,
+      height: visualSurfaceHeight,
+    };
+
+    this.videoSurfaceMetrics = {
+      left: content.left,
+      top: content.top,
+      cssWidth: content.width,
+      cssHeight: content.height,
+      visualSurfaceWidth,
+      visualSurfaceHeight,
+      surfaceWidth: inputSurface.width,
+      surfaceHeight: inputSurface.height,
+      movementScaleX: content.width > 0 ? inputSurface.width / content.width : devicePixelRatio,
+      movementScaleY: content.height > 0 ? inputSurface.height / content.height : devicePixelRatio,
+      devicePixelRatio,
+    };
+    this.videoSurfaceMetricsDirty = false;
+    return this.videoSurfaceMetrics;
+  }
+
+  private getVideoSurfaceMetrics() {
+    const devicePixelRatio = window.devicePixelRatio || 1;
+    if (this.videoSurfaceMetrics && !this.videoSurfaceMetricsDirty && this.videoSurfaceMetrics.devicePixelRatio === devicePixelRatio) {
+      return this.videoSurfaceMetrics;
+    }
+    return this.refreshVideoSurfaceMetrics();
+  }
+
+  private buildNormalizedPoint(clientX: number, clientY: number): PendingMouseMove | null {
+    const metrics = this.getVideoSurfaceMetrics();
+    if (!metrics) return null;
+
+    const devicePixelRatio = window.devicePixelRatio || 1;
+    const rawX = (clientX - metrics.left) * devicePixelRatio;
+    const rawY = (clientY - metrics.top) * devicePixelRatio;
+
+    return {
+      x: clamp01(rawX / metrics.visualSurfaceWidth),
+      y: clamp01(rawY / metrics.visualSurfaceHeight),
+      surfaceWidth: metrics.surfaceWidth,
+      surfaceHeight: metrics.surfaceHeight,
+    };
+  }
+
+  private resolveMouseMovement(event: MouseEvent, metrics: VideoSurfaceMetrics) {
+    const movementScaleX = metrics.movementScaleX || metrics.devicePixelRatio || 1;
+    const movementScaleY = metrics.movementScaleY || metrics.devicePixelRatio || 1;
+    return {
+      movementX: (event.movementX || 0) * movementScaleX,
+      movementY: (event.movementY || 0) * movementScaleY,
+    };
+  }
+
+  // === Mouse move batching (official EventHandler.updatePosition + _sendBatchedMouseMove) ===
+
+  private handleMouseMove = (event: MouseEvent) => {
+    if (this.shouldBlockMouseMove()) return;
+    const metrics = this.getVideoSurfaceMetrics();
+    if (!metrics) return;
+
+    const movement = this.resolveMouseMovement(event, metrics);
+    const point = this.buildNormalizedPoint(event.clientX, event.clientY);
+    if (!point) return;
+
+    this.pendingMouseMove = point;
+    this.pendingMovementX += movement.movementX;
+    this.pendingMovementY += movement.movementY;
+    this.scheduleMouseMoveFlush(this.shouldUseLowLatencyMouseMove());
+  };
+
+  private shouldBlockMouseMove() {
+    if (this.transportMode !== 'relative') return false;
+    return this.shouldUsePointerLock() && !this.isPointerLocked();
+  }
+
+  private shouldUseLowLatencyMouseMove() {
+    return this.cursorState !== 1 && this.transportMode === 'relative' && this.isPointerLocked();
+  }
+
+  private scheduleMouseMoveFlush(useLowLatency: boolean) {
+    if (useLowLatency) {
+      if (this.mouseMoveRaf !== null) {
+        cancelAnimationFrame(this.mouseMoveRaf);
+        this.mouseMoveRaf = null;
+      }
+      if (this.mouseMoveTimer === null) {
+        this.mouseMoveTimer = window.setTimeout(this.sendBatchedMouseMove, LOW_LATENCY_MOUSE_MOVE_DELAY_MS);
+      }
+      return;
+    }
+
+    if (this.mouseMoveTimer !== null) return;
+    if (this.mouseMoveRaf === null) {
+      this.mouseMoveRaf = window.requestAnimationFrame(this.sendBatchedMouseMove);
+    }
+  }
+
+  private sendBatchedMouseMove = () => {
+    this.mouseMoveRaf = null;
+    this.mouseMoveTimer = null;
+    if (!this.pendingMouseMove) return;
+
+    const pending = this.pendingMouseMove;
+    const data = this.buildMouseMoveData(pending, this.pendingMovementX, this.pendingMovementY);
+    this.sendRttEvent(data);
+
+    this.pendingMouseMove = null;
+    this.pendingMovementX = 0;
+    this.pendingMovementY = 0;
+  };
+
+  // Mirrors CursorModeManager.buildMouseMoveData (Legacy branch): trunc + remainder in
+  // relative transport, full-float X/Y, Math.round on the wire offsets.
+  private buildMouseMoveData(pending: PendingMouseMove, movementX: number, movementY: number): Record<string, unknown> {
+    let offsetX = Number.isFinite(movementX) ? movementX : 0;
+    let offsetY = Number.isFinite(movementY) ? movementY : 0;
+
+    if (this.transportMode === 'relative') {
+      const totalX = offsetX + this.relativeMovementRemainder.x;
+      const totalY = offsetY + this.relativeMovementRemainder.y;
+      offsetX = Math.trunc(totalX);
+      offsetY = Math.trunc(totalY);
+      this.relativeMovementRemainder.x = totalX - offsetX;
+      this.relativeMovementRemainder.y = totalY - offsetY;
+    } else {
+      this.resetRelativeMovementRemainder();
+    }
+
+    const nextX = Number.isFinite(pending.x) ? pending.x : this.cursorPosition.x;
+    const nextY = Number.isFinite(pending.y) ? pending.y : this.cursorPosition.y;
+
+    if (
+      this.pendingActivationPositionRequiresSync &&
+      this.transportMode === 'absolute' &&
+      (Number.isFinite(pending.x) || Number.isFinite(pending.y) || offsetX !== 0 || offsetY !== 0)
+    ) {
+      this.consumePendingActivationPosition();
+    }
+
+    this.cursorPosition = { x: nextX, y: nextY };
+    this.emitCursorState();
+
+    return {
+      type: 'mouse',
+      action: 'move',
+      X: nextX,
+      Y: nextY,
+      offsetX: Math.round(offsetX),
+      offsetY: Math.round(offsetY),
+      isVisible: this.transportMode === 'absolute',
+    };
+  }
+
+  private resetPendingMouseMove() {
+    this.pendingMouseMove = null;
+    this.pendingMovementX = 0;
+    this.pendingMovementY = 0;
+    if (this.mouseMoveRaf !== null) {
+      cancelAnimationFrame(this.mouseMoveRaf);
+      this.mouseMoveRaf = null;
+    }
+    if (this.mouseMoveTimer !== null) {
+      window.clearTimeout(this.mouseMoveTimer);
+      this.mouseMoveTimer = null;
+    }
+  }
+
+  private flushPendingMouseMoveImmediately() {
+    if (!this.pendingMouseMove) return;
+    if (this.mouseMoveRaf !== null) {
+      cancelAnimationFrame(this.mouseMoveRaf);
+      this.mouseMoveRaf = null;
+    }
+    if (this.mouseMoveTimer !== null) {
+      window.clearTimeout(this.mouseMoveTimer);
+      this.mouseMoveTimer = null;
+    }
+    this.sendBatchedMouseMove();
+  }
+
+  // === Mouse buttons / wheel / context menu ===
+
+  private handleMouseButton = (event: MouseEvent) => {
+    const isPressed = event.type === 'mousedown';
+    if (event.cancelable !== false) event.preventDefault();
+    this.flushPendingMouseMoveImmediately();
+
+    // In relative transport without pointer lock, mousedown re-requests the lock and the
+    // button send is aborted (official CursorModeManager.maybeCaptureMouseDown).
+    if (isPressed && this.shouldUsePointerLock() && !this.isPointerLocked() && this.requestPointerLock('mousedown')) {
+      return;
+    }
+
+    if (this.cursorState === 1) return;
+    this.sendRttEvent({ type: 'mouse', action: 'button', isPressed, btn: event.button });
+  };
+
+  private handleWheel = (event: WheelEvent) => {
+    this.sendRttEvent({ type: 'mouse', action: 'wheel', deltaY: Math.sign(event.deltaY) });
+  };
+
+  private handleContextMenu = (event: MouseEvent) => {
+    if (this.cursorState !== 1) event.preventDefault();
+  };
+
+  // === Keyboard (unchanged behavior aside from full-release hooks) ===
+
+  private handleKeyDown = (event: KeyboardEvent) => {
+    event.preventDefault();
+    this.sendKeyboardButton(mapKeyCode(event), true);
+  };
+
+  private handleKeyUp = (event: KeyboardEvent) => {
+    event.preventDefault();
+    this.sendKeyboardButton(mapKeyCode(event), false);
+  };
+
+  // === Focus / visibility / fullscreen ===
+
+  private handleWindowFocus = () => {
+    this.sendEvent({ type: 'stream', action: 'page', is_visible: true, is_focus: true });
+  };
+
+  private handleWindowBlur = () => {
+    this.sendEvent({ type: 'stream', action: 'page', is_visible: true, is_focus: false });
+    this.fullInputRelease('window blur');
+  };
+
+  private handleVisibilityChange = () => {
+    this.sendEvent({ type: 'stream', action: 'page', is_visible: !document.hidden });
+    if (document.hidden) this.releasePressedKeys('page hidden');
+  };
+
+  private handleFullscreenChange = () => {
+    this.invalidateVideoSurfaceMetrics();
+    if (!document.fullscreenElement) {
+      this.fullInputRelease('fullscreen exited');
+    }
+  };
+
+  private handlePreventCtrlWheelZoom = (event: WheelEvent) => {
+    if (event.ctrlKey) event.preventDefault();
+  };
+
+  // === Pointer lock (official CursorModeManager.requestPointerLock, Legacy failure path) ===
+
+  private isPointerLocked() {
+    return document.pointerLockElement === this.videoElement;
+  }
+
+  private shouldUsePointerLock() {
+    return this.cursorState !== 1 && this.transportMode === 'relative';
+  }
+
+  private exitPointerLockIfHeld() {
+    this.isPointerLockRequestPending = false;
+    if (!this.isPointerLocked()) return;
+    try {
+      document.exitPointerLock?.();
+    } catch {
+      // ignore
+    }
+  }
+
+  private clearPointerLockRequestTimeouts() {
+    this.pointerLockRequestTimeoutIds.forEach((timeoutId) => window.clearTimeout(timeoutId));
+    this.pointerLockRequestTimeoutIds.clear();
+  }
+
+  private schedulePointerLockRequestTimeout(callback: () => void, delay: number) {
+    const timeoutId = window.setTimeout(() => {
+      this.pointerLockRequestTimeoutIds.delete(timeoutId);
+      callback();
+    }, delay);
+    this.pointerLockRequestTimeoutIds.add(timeoutId);
+  }
+
+  private getPointerLockOptions(): PointerLockOptions | null {
+    if (detectPlatformCode() === 'lin') return null;
+    return { unadjustedMovement: true };
+  }
+
+  private shouldFallbackToBasicPointerLock(error: unknown) {
+    const message = (error instanceof Error ? error.message : String(error ?? '')).toLowerCase();
+    return (
+      (error as { name?: string } | null)?.name === 'NotSupportedError' ||
+      error instanceof RangeError ||
+      message.includes('maximum call stack') ||
+      message.includes('unadjustedmovement')
+    );
+  }
+
+  private requestPointerLock(reason: string): boolean {
+    if (!this.shouldUsePointerLock()) return false;
+
+    const videoElement = this.videoElement;
+    if (typeof videoElement.requestPointerLock !== 'function') return false;
+
+    if (this.isPointerLocked()) {
+      this.isPointerLockRequestPending = false;
+      return true;
+    }
+
+    const timestamp = Date.now();
+    if (this.isPointerLockRequestPending || timestamp - this.pointerLockRequestedAt < POINTER_LOCK_REQUEST_COOLDOWN_MS) {
+      return false;
+    }
+
+    this.isPointerLockRequestPending = true;
+    this.pointerLockRequestedAt = timestamp;
+
+    const request = videoElement.requestPointerLock.bind(videoElement) as (options?: PointerLockOptions) => unknown;
+
+    try {
+      let pointerLockResult: unknown;
+      const options = this.getPointerLockOptions();
+
+      if (options) {
+        try {
+          pointerLockResult = request(options);
+        } catch (optionError) {
+          if (this.shouldFallbackToBasicPointerLock(optionError)) {
+            this.log('Pointer lock options failed; using basic requestPointerLock');
+            pointerLockResult = request();
+          } else {
+            throw optionError;
+          }
+        }
+      } else {
+        pointerLockResult = request();
+      }
+
+      if (!pointerLockResult) {
+        this.schedulePointerLockRequestTimeout(() => {
+          if (this.isPointerLockRequestPending && !this.isPointerLocked()) {
+            this.handlePointerLockRequestFailure(new Error('Pointer lock was not acquired'), reason);
+          }
+        }, POINTER_LOCK_REQUEST_FALLBACK_TIMEOUT_MS);
+      }
+
+      if (isPromiseLike(pointerLockResult)) {
+        this.settlePointerLockPromise(pointerLockResult, reason, options ? request : null);
+      }
+    } catch (error) {
+      this.handlePointerLockRequestFailure(error, reason);
+      return false;
+    }
+
+    return true;
+  }
+
+  private settlePointerLockPromise(promise: Promise<void>, reason: string, basicRetry: ((options?: PointerLockOptions) => unknown) | null) {
+    promise
+      .then(() => {
+        this.isPointerLockRequestPending = false;
+        if (!this.isPointerLocked()) {
+          this.handlePointerLockRequestFailure(new Error('Pointer lock was not acquired'), reason);
+        }
+      })
+      .catch((error: unknown) => {
+        if (basicRetry && this.shouldFallbackToBasicPointerLock(error)) {
+          this.log('Pointer lock with unadjustedMovement rejected; retrying basic requestPointerLock');
+          try {
+            const retryResult = basicRetry();
+            if (isPromiseLike(retryResult)) {
+              this.settlePointerLockPromise(retryResult, reason, null);
+            } else {
+              this.schedulePointerLockRequestTimeout(() => {
+                if (this.isPointerLockRequestPending && !this.isPointerLocked()) {
+                  this.handlePointerLockRequestFailure(new Error('Pointer lock was not acquired'), reason);
+                }
+              }, POINTER_LOCK_REQUEST_FALLBACK_TIMEOUT_MS);
+            }
+            return;
+          } catch (retryError) {
+            this.handlePointerLockRequestFailure(retryError, reason);
+            return;
+          }
+        }
+        this.handlePointerLockRequestFailure(error, reason);
+      });
+  }
+
+  private handlePointerLockRequestFailure(error: unknown, reason: string) {
+    this.isPointerLockRequestPending = false;
+    this.clearPointerLockRequestTimeouts();
+    this.log(`Pointer lock request failed (${reason}): ${error instanceof Error ? error.message : String(error)}`);
+    this.fallBackToAbsoluteTransport();
+  }
+
+  // Legacy failure path: without a pointer lock the relative transport is unusable, so the
+  // client falls back to absolute transport locally.
+  private fallBackToAbsoluteTransport() {
+    if (!this.setTransportMode('absolute')) return;
+    if (this.cursorState !== 1) this.cursorState = 2;
+    this.lastCursorState = this.getCursorStateForActiveCapture();
+    this.resetPendingMouseMove();
+    if (this.cursorState > 1) this.refreshSessionCursor();
+    this.emitCursorState();
+  }
+
+  private handlePointerLockChange = () => {
+    this.isPointerLockRequestPending = false;
+    this.clearPointerLockRequestTimeouts();
+    const isLocked = this.isPointerLocked();
+
+    if (isLocked && !this.shouldUsePointerLock()) {
+      this.exitPointerLockIfHeld();
+    }
+
+    if (!isLocked && this.transportMode === 'relative') {
+      // Prior behavior: losing pointer lock in relative mode releases held keys.
+      this.releasePressedKeys('pointer lock lost');
+    }
+
+    if (this.cursorState > 1) {
+      this.refreshSessionCursor();
+    }
+  };
+
+  private handlePointerLockError = () => {
+    this.isPointerLockRequestPending = false;
+    this.clearPointerLockRequestTimeouts();
+    this.log('Pointer lock error; falling back to absolute transport');
+    this.fallBackToAbsoluteTransport();
+  };
 
   private async startWebRtcTransport() {
     if (this.pc) return;
@@ -705,6 +1602,7 @@ export class OpenStroidStreamClient {
         this.videoElement.autoplay = true;
         this.videoElement.playsInline = true;
         this.videoElement.srcObject = stream;
+        this.invalidateVideoSurfaceMetrics();
         void this.videoElement.play().then(() => {
           this.log(`Video playback started readyState=${this.videoElement.readyState}`);
         }).catch((error: unknown) => {
@@ -751,7 +1649,7 @@ export class OpenStroidStreamClient {
 
   private async prepareOfferSdp(sdp: string) {
     const gatewayCodec = await this.fetchGatewayCodec();
-    const allowAv1 = gatewayCodec !== 'H264' && this.preferredCodec === 'av1';
+    const allowAv1 = gatewayCodec !== 'H264' && this.activeCodec === 'av1';
     const allowedCodecs = [
       ...(allowAv1 ? ['video/AV1'] : []),
       'video/H264',
@@ -779,14 +1677,17 @@ export class OpenStroidStreamClient {
       const response = await fetch(url);
       if (!response.ok) return '';
       const payload = (await response.json()) as { codec?: unknown };
-      return typeof payload.codec === 'string' ? payload.codec : '';
+      const codec = typeof payload.codec === 'string' ? payload.codec : '';
+      this.gatewayCodec = codec;
+      return codec;
     } catch {
       return '';
     }
   }
 
   private sendGatewayStatus() {
-    const maxFramerate = 60;
+    const maxFramerate = this.runtimeSettings.maxFramerate;
+    const maxBitrate = this.runtimeSettings.maxBitrateMbps * 1_000_000;
     this.log('Sending stream status response');
     this.sendEvent({ type: 'keyboard', action: 'language', code: 1033 });
     this.sendEvent({
@@ -799,17 +1700,21 @@ export class OpenStroidStreamClient {
         gpu: 'unknown',
         proto: 1,
         framerate_max: maxFramerate,
-        bitrate_max: 20_000_000,
-        hdr: false,
+        bitrate_max: maxBitrate,
+        hdr: this.runtimeSettings.hdrEnabled,
         cursor_zip: 'CompressionStream' in window,
-        filler: false,
+        filler: this.runtimeSettings.fillerEnabled,
         beta: 0,
         rtcEngine: 'webrtc',
         rtcAudio: 'pcm',
         network_type: connectionType(),
+        ...(this.activeCodec === 'av1' ? { codec: 'av1' } : {}),
       },
     });
     this.sendEvent({ type: 'stream', action: 'refreshRate', value: maxFramerate });
+    if (this.runtimeSettings.fsrEnabled) {
+      this.sendEvent({ type: 'stream', action: 'fsr', value: true });
+    }
   }
 
   private async fetchIceServers() {
@@ -897,137 +1802,6 @@ export class OpenStroidStreamClient {
     return [];
   }
 
-  private installInputHandlers() {
-    if (this.inputInstalled) return;
-    const target = this.videoElement;
-    target.tabIndex = 0;
-
-    this.handlers.click = (event) => {
-      this.updateCursorFromMouseEvent(event as MouseEvent);
-      target.focus();
-    };
-    this.handlers.contextmenu = (event) => {
-      event.preventDefault();
-    };
-    this.handlers.mousemove = (event) => {
-      const mouseEvent = event as MouseEvent;
-      const isRelative = this.updateCursorFromMouseEvent(mouseEvent);
-      this.sendRttEvent({
-        type: 'mouse',
-        action: 'move',
-        X: Number(this.cursor.x.toFixed(4)),
-        Y: Number(this.cursor.y.toFixed(4)),
-        isVisible: !isRelative,
-        offsetX: isRelative ? mouseEvent.movementX || 0 : 0,
-        offsetY: isRelative ? mouseEvent.movementY || 0 : 0,
-      });
-    };
-    this.handlers.mousedown = (event) => {
-      event.preventDefault();
-      const isRelative = this.updateCursorFromMouseEvent(event as MouseEvent);
-      this.sendRttEvent({
-        type: 'mouse',
-        action: 'button',
-        isPressed: true,
-        btn: (event as MouseEvent).button,
-        X: Number(this.cursor.x.toFixed(4)),
-        Y: Number(this.cursor.y.toFixed(4)),
-        isVisible: !isRelative,
-      });
-    };
-    this.handlers.mouseup = (event) => {
-      event.preventDefault();
-      const isRelative = this.updateCursorFromMouseEvent(event as MouseEvent);
-      this.sendRttEvent({
-        type: 'mouse',
-        action: 'button',
-        isPressed: false,
-        btn: (event as MouseEvent).button,
-        X: Number(this.cursor.x.toFixed(4)),
-        Y: Number(this.cursor.y.toFixed(4)),
-        isVisible: !isRelative,
-      });
-    };
-    this.handlers.wheel = (event) => {
-      event.preventDefault();
-      this.sendRttEvent({ type: 'mouse', action: 'wheel', deltaY: Math.sign((event as WheelEvent).deltaY || 0) });
-    };
-    this.handlers.keydown = (event) => {
-      event.preventDefault();
-      this.sendKeyboardButton(mapKeyCode(event as KeyboardEvent), true);
-    };
-    this.handlers.keyup = (event) => {
-      event.preventDefault();
-      this.sendKeyboardButton(mapKeyCode(event as KeyboardEvent), false);
-    };
-    this.handlers.blur = () => {
-      this.releasePressedKeys('window blur');
-    };
-    this.handlers.visibilitychange = () => {
-      this.sendEvent({ type: 'stream', action: 'page', is_visible: !document.hidden });
-      if (document.hidden) this.releasePressedKeys('page hidden');
-    };
-    this.handlers.pointerlockchange = () => {
-      const isLocked = document.pointerLockElement === target;
-      if (isLocked) {
-        this.mouseMode = 'relative';
-        this.onMouseMode(this.mouseMode);
-        this.cursor = { ...this.cursor, visible: false };
-        this.onCursor(this.cursor);
-        return;
-      }
-
-      if (this.mouseMode === 'relative') {
-        this.mouseMode = 'absolute';
-        this.onMouseMode(this.mouseMode);
-      }
-      this.releasePressedKeys('pointer lock changed');
-      this.cursor = { ...this.cursor, visible: true };
-      this.onCursor(this.cursor);
-    };
-    this.handlers.pointerlockerror = () => {
-      this.mouseMode = 'absolute';
-      this.onMouseMode(this.mouseMode);
-      this.log('Pointer lock failed; staying in absolute mouse mode');
-    };
-
-    target.addEventListener('click', this.handlers.click);
-    target.addEventListener('contextmenu', this.handlers.contextmenu);
-    target.addEventListener('mousemove', this.handlers.mousemove);
-    target.addEventListener('mousedown', this.handlers.mousedown);
-    target.addEventListener('mouseup', this.handlers.mouseup);
-    target.addEventListener('wheel', this.handlers.wheel, { passive: false });
-    window.addEventListener('keydown', this.handlers.keydown);
-    window.addEventListener('keyup', this.handlers.keyup);
-    window.addEventListener('blur', this.handlers.blur);
-    document.addEventListener('visibilitychange', this.handlers.visibilitychange);
-    document.addEventListener('pointerlockchange', this.handlers.pointerlockchange);
-    document.addEventListener('pointerlockerror', this.handlers.pointerlockerror);
-    this.inputInstalled = true;
-    this.sendRttEvent({ type: 'mouse', action: 'connected' });
-    this.sendRttEvent({ type: 'keyboard', action: 'connected' });
-  }
-
-  private uninstallInputHandlers() {
-    if (!this.inputInstalled) return;
-    this.releasePressedKeys('input handlers removed');
-    const target = this.videoElement;
-    if (this.handlers.click) target.removeEventListener('click', this.handlers.click);
-    if (this.handlers.contextmenu) target.removeEventListener('contextmenu', this.handlers.contextmenu);
-    if (this.handlers.mousemove) target.removeEventListener('mousemove', this.handlers.mousemove);
-    if (this.handlers.mousedown) target.removeEventListener('mousedown', this.handlers.mousedown);
-    if (this.handlers.mouseup) target.removeEventListener('mouseup', this.handlers.mouseup);
-    if (this.handlers.wheel) target.removeEventListener('wheel', this.handlers.wheel);
-    if (this.handlers.keydown) window.removeEventListener('keydown', this.handlers.keydown);
-    if (this.handlers.keyup) window.removeEventListener('keyup', this.handlers.keyup);
-    if (this.handlers.blur) window.removeEventListener('blur', this.handlers.blur);
-    if (this.handlers.visibilitychange) document.removeEventListener('visibilitychange', this.handlers.visibilitychange);
-    if (this.handlers.pointerlockchange) document.removeEventListener('pointerlockchange', this.handlers.pointerlockchange);
-    if (this.handlers.pointerlockerror) document.removeEventListener('pointerlockerror', this.handlers.pointerlockerror);
-    this.handlers = {};
-    this.inputInstalled = false;
-  }
-
   private sendKeyboardButton(code: number, isPressed: boolean) {
     if (!code) return;
     if (isPressed) {
@@ -1080,14 +1854,28 @@ export class OpenStroidStreamClient {
       }
       const elapsedSec = Math.max(0.001, (report.timestamp - this.statsPrev.timestamp) / 1000);
       const packetDiff = packetsReceived - this.statsPrev.packetsReceived;
+      const realBitrate = Math.max(0, Math.round(((bytesReceived - this.statsPrev.bytesReceived) * 8) / elapsedSec));
+      const decodedFps = Math.max(0, Math.round((framesDecoded - this.statsPrev.framesDecoded) / elapsedSec));
+      const receivedFps = Math.max(0, Math.round((framesReceived - this.statsPrev.framesReceived) / elapsedSec));
+      const packetLoss = packetDiff > 0 ? Number((((packetsLost - this.statsPrev.packetsLost) * 100) / packetDiff).toFixed(2)) : 0;
       this.sendEvent({
         type: 'stream',
         action: 'bitrate',
-        realBitrate: Math.max(0, Math.round(((bytesReceived - this.statsPrev.bytesReceived) * 8) / elapsedSec)),
-        framerateDecoded: Math.max(0, Math.round((framesDecoded - this.statsPrev.framesDecoded) / elapsedSec)),
-        framerateReceived: Math.max(0, Math.round((framesReceived - this.statsPrev.framesReceived) / elapsedSec)),
-        lossPacket: packetDiff > 0 ? Number((((packetsLost - this.statsPrev.packetsLost) * 100) / packetDiff).toFixed(2)) : 0,
+        realBitrate,
+        framerateDecoded: decodedFps,
+        framerateReceived: receivedFps,
+        lossPacket: packetLoss,
         time: Date.now(),
+      });
+      this.onStats({
+        bitrate: realBitrate,
+        decodedFps,
+        receivedFps,
+        packetLoss,
+        connectionState: this.pc?.connectionState ?? 'unknown',
+        gatewayHost: this.gatewayHost,
+        codec: this.gatewayCodec || this.activeCodec,
+        at: Date.now(),
       });
       this.statsPrev = { timestamp: report.timestamp, bytesReceived, framesDecoded, framesReceived, packetsReceived, packetsLost };
       return;
@@ -1100,9 +1888,10 @@ export class OpenStroidStreamClient {
     }
   }
 
+  // Every 30th input event carries a timestamp for RTT measurement (official sendRttEvent).
   private sendRttEvent(data: Record<string, unknown>) {
     this.eventCount += 1;
-    if (this.eventCount >= 20) {
+    if (this.eventCount > 29) {
       data.time = Date.now();
       this.eventCount = 0;
     }

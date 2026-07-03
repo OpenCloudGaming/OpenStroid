@@ -4,77 +4,279 @@
     <meta charset="utf-8" />
     <title>OpenStroid Capture</title>
     <style>
+      :root {
+        color-scheme: dark;
+        --bg: #0b0d12;
+        --panel: #111620;
+        --panel-2: #151b26;
+        --text: #f3f6fb;
+        --muted: #98a2b3;
+        --line: #253044;
+        --accent: #14b8a6;
+        --accent-2: #38bdf8;
+        --warn: #f59e0b;
+        --danger: #f87171;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
       body {
-        font-family: Inter, Arial, sans-serif;
-        background: #11131a;
-        color: #f3f5f7;
-        width: 320px;
+        width: 360px;
         margin: 0;
-        padding: 16px;
+        padding: 0;
+        background: var(--bg);
+        color: var(--text);
+        font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
       }
+
+      main {
+        padding: 14px;
+      }
+
+      header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        margin-bottom: 14px;
+      }
+
       h1 {
+        margin: 0;
         font-size: 16px;
-        margin: 0 0 12px;
+        line-height: 1.2;
       }
+
+      .subtitle {
+        margin: 4px 0 0;
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .mark {
+        display: grid;
+        place-items: center;
+        width: 34px;
+        height: 34px;
+        border-radius: 8px;
+        background: linear-gradient(135deg, var(--accent), var(--accent-2));
+        color: #031014;
+        font-weight: 900;
+        flex: 0 0 auto;
+      }
+
+      .panel {
+        padding: 12px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: var(--panel);
+      }
+
+      .panel + .panel {
+        margin-top: 10px;
+      }
+
       label {
         display: block;
-        font-size: 12px;
-        color: #9ca3af;
         margin-bottom: 6px;
+        color: var(--muted);
+        font-size: 12px;
+        font-weight: 700;
       }
+
       input {
         width: 100%;
-        box-sizing: border-box;
-        border: 1px solid #374151;
-        background: #0b0d12;
-        color: #f3f5f7;
+        height: 38px;
+        border: 1px solid var(--line);
         border-radius: 8px;
-        padding: 10px 12px;
-        margin-bottom: 10px;
+        padding: 0 10px;
+        background: #080b10;
+        color: var(--text);
+        font: inherit;
+        outline: none;
       }
+
+      input:focus {
+        border-color: var(--accent);
+      }
+
+      .field + .field {
+        margin-top: 10px;
+      }
+
+      .actions {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 8px;
+        margin-top: 12px;
+      }
+
       button {
-        border: 0;
+        height: 36px;
+        border: 1px solid transparent;
         border-radius: 8px;
-        padding: 10px 12px;
-        font-weight: 600;
+        padding: 0 10px;
+        font: inherit;
+        font-size: 13px;
+        font-weight: 800;
         cursor: pointer;
-        margin-right: 8px;
       }
-      #save {
-        background: linear-gradient(135deg, #00d4f5 0%, #6600f5 100%);
-        color: white;
+
+      button.primary {
+        background: var(--accent);
+        color: #031014;
       }
-      #open,
-      #captureNow,
-      #refresh {
-        background: #1f2937;
-        color: white;
+
+      button.secondary {
+        border-color: var(--line);
+        background: var(--panel-2);
+        color: var(--text);
       }
+
+      button:disabled {
+        cursor: not-allowed;
+        opacity: 0.55;
+      }
+
+      .status-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+      }
+
+      .badge {
+        border-radius: 999px;
+        padding: 4px 8px;
+        background: rgba(148, 163, 184, 0.12);
+        color: var(--muted);
+        font-size: 11px;
+        font-weight: 800;
+        white-space: nowrap;
+      }
+
+      .badge.ok {
+        background: rgba(20, 184, 166, 0.18);
+        color: #5eead4;
+      }
+
+      .badge.warn {
+        background: rgba(245, 158, 11, 0.18);
+        color: #fbbf24;
+      }
+
+      .badge.error {
+        background: rgba(248, 113, 113, 0.16);
+        color: #fca5a5;
+      }
+
+      .message {
+        margin: 10px 0 0;
+        color: var(--muted);
+        font-size: 12px;
+        line-height: 1.45;
+      }
+
+      .metrics {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 8px;
+        margin-top: 10px;
+      }
+
+      .metric {
+        padding: 9px;
+        border-radius: 8px;
+        background: #080b10;
+      }
+
+      .metric strong {
+        display: block;
+        font-size: 16px;
+      }
+
+      .metric span {
+        color: var(--muted);
+        font-size: 11px;
+      }
+
+      details {
+        margin-top: 10px;
+      }
+
+      summary {
+        color: var(--muted);
+        cursor: pointer;
+        font-size: 12px;
+        font-weight: 700;
+      }
+
       pre {
+        max-height: 180px;
+        overflow: auto;
         white-space: pre-wrap;
         word-break: break-word;
-        background: #0b0d12;
-        border: 1px solid #374151;
-        border-radius: 8px;
+        margin: 8px 0 0;
         padding: 10px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: #080b10;
+        color: #cbd5e1;
         font-size: 11px;
-        color: #9ca3af;
       }
     </style>
   </head>
   <body>
-    <h1>OpenStroid Capture</h1>
-    <label for="backendBaseUrl">Backend base URL</label>
-    <input id="backendBaseUrl" type="text" placeholder="http://127.0.0.1:3001" />
-    <label for="pairingCode">Pairing code</label>
-    <input id="pairingCode" type="text" placeholder="Paste from OpenStroid login page" />
-    <div>
-      <button id="save">Save</button>
-      <button id="open" type="button">Open Boosteroid</button>
-      <button id="captureNow" type="button">Capture now</button>
-      <button id="refresh" type="button">Refresh</button>
-    </div>
-    <pre id="status">Loading…</pre>
+    <main>
+      <header>
+        <div>
+          <h1>OpenStroid Capture</h1>
+          <p class="subtitle">Pair Chrome with the local desktop bridge.</p>
+        </div>
+        <div class="mark" aria-hidden="true">OS</div>
+      </header>
+
+      <section class="panel" aria-label="Connection settings">
+        <div class="field">
+          <label for="backendBaseUrl">Bridge URL</label>
+          <input id="backendBaseUrl" type="text" spellcheck="false" placeholder="http://127.0.0.1:3001" />
+        </div>
+        <div class="field">
+          <label for="pairingCode">Pairing code</label>
+          <input id="pairingCode" type="text" spellcheck="false" placeholder="Paste code from OpenStroid" />
+        </div>
+        <div class="actions">
+          <button id="save" class="primary">Save Pairing</button>
+          <button id="open" class="secondary" type="button">Open Boosteroid</button>
+          <button id="captureNow" class="secondary" type="button">Capture Now</button>
+          <button id="refresh" class="secondary" type="button">Refresh</button>
+        </div>
+      </section>
+
+      <section class="panel" aria-label="Capture status">
+        <div class="status-row">
+          <strong id="statusTitle">Loading</strong>
+          <span id="statusBadge" class="badge">Checking</span>
+        </div>
+        <p id="statusMessage" class="message">Reading extension state...</p>
+        <div class="metrics">
+          <div class="metric">
+            <strong id="eventCount">0</strong>
+            <span>network events</span>
+          </div>
+          <div class="metric">
+            <strong id="storageCount">0</strong>
+            <span>storage items</span>
+          </div>
+        </div>
+        <details>
+          <summary>Debug details</summary>
+          <pre id="debugOutput">Loading...</pre>
+        </details>
+      </section>
+    </main>
     <script src="popup.js"></script>
   </body>
 </html>

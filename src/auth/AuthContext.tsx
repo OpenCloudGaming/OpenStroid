@@ -49,7 +49,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [applySession]);
 
   useEffect(() => {
-    void refreshSession();
+    const handle = window.setTimeout(() => {
+      void refreshSession();
+    }, 0);
+    return () => window.clearTimeout(handle);
   }, [refreshSession]);
 
   useEffect(() => {

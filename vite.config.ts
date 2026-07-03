@@ -6,6 +6,7 @@ const backendUrl = process.env.BACKEND_PROXY_TARGET || 'http://127.0.0.1:3001';
 export default defineConfig({
   plugins: [react()],
   server: {
+    host: '127.0.0.1',
     port: 3000,
     open: false,
     proxy: {

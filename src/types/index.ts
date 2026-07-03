@@ -19,7 +19,7 @@ export type LoginCaptureStatus =
   | 'cancelled'
   | 'timed_out';
 
-export type LoginCaptureMethod = 'extension' | 'browser';
+export type LoginCaptureMethod = 'extension';
 
 export type QRCodeLoginStatus =
   | 'polling'
@@ -97,7 +97,7 @@ export interface CaptureEvent {
   headers?: Record<string, string>;
   cookieNames?: string[];
   message?: string;
-  source?: 'browser' | 'extension';
+  source?: 'extension';
 }
 
 export interface StoredCookie {
@@ -136,7 +136,7 @@ export interface CaptureArtifact {
     createdAt: number;
     updatedAt: number;
   } | null;
-  ingestSource?: 'browser' | 'extension';
+  ingestSource?: 'extension';
   extensionMetadata?: Record<string, unknown>;
   diagnostics?: CaptureDiagnostics;
 }
@@ -158,6 +158,46 @@ export interface InstalledGame {
   cover?: string;
   description?: string;
   [key: string]: unknown;
+}
+
+export interface LibraryFacet {
+  id?: number | string;
+  key?: string;
+  slug?: string;
+  name?: string;
+  title?: string;
+  value?: string;
+  [key: string]: unknown;
+}
+
+export interface LibraryDashboard {
+  user: User | null;
+  installedGames: InstalledGame[];
+  catalogGames: InstalledGame[];
+  newGames: InstalledGame[];
+  carousel: Array<Record<string, unknown>>;
+  facets: {
+    collections: LibraryFacet[];
+    genres: LibraryFacet[];
+    platforms: LibraryFacet[];
+    orderBy: LibraryFacet[];
+    languages: LibraryFacet[];
+  };
+  account: {
+    subscriptions: Array<Record<string, unknown>>;
+  };
+  sessions: {
+    active: Record<string, unknown> | null;
+    last: Record<string, unknown> | null;
+  };
+  generatedAt: string;
+}
+
+export interface StreamSessionResponse {
+  session?: Record<string, unknown> | null;
+  sessions?: Record<string, unknown> | null;
+  gateways?: unknown[];
+  result?: Record<string, unknown>;
 }
 
 export interface StreamLaunchCookie {
@@ -193,6 +233,17 @@ export interface StreamClientConfig {
   accessToken: string;
   authDataToken: string;
   preferredCodec?: 'auto' | 'av1' | 'h264';
+}
+
+export interface StreamRealtimeStats {
+  bitrate: number;
+  decodedFps: number;
+  receivedFps: number;
+  packetLoss: number;
+  connectionState: RTCPeerConnectionState | 'unknown';
+  gatewayHost: string;
+  codec?: string;
+  at: number;
 }
 
 export interface ApiError {

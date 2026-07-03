@@ -1,0 +1,490 @@
+:root {
+  color-scheme: dark;
+  --os-bg: #090a0c;
+  --os-bg-soft: #0f1013;
+  --os-panel: #151518;
+  --os-panel-2: #1a1a1f;
+  --os-card: #151518;
+  --os-card-hover: #1c1c20;
+  --os-chip: #1e1e23;
+  --os-border: rgba(255, 255, 255, 0.06);
+  --os-border-strong: rgba(255, 255, 255, 0.1);
+  --os-ink: #ececef;
+  --os-ink-soft: #9a9aa3;
+  --os-ink-muted: #5c5c66;
+  --os-accent: #58d98a;
+  --os-accent-on: #062315;
+  --os-accent-soft: rgba(88, 217, 138, 0.13);
+  --os-accent-border: rgba(88, 217, 138, 0.38);
+  --os-radius-sm: 8px;
+  --os-radius-md: 12px;
+  --os-navbar-h: 48px;
+
+  /* OpenNOW-compatible tokens for shared settings UI */
+  --bg-a: var(--os-bg);
+  --bg-c: var(--os-panel-2);
+  --panel-border: var(--os-border);
+  --panel-border-solid: var(--os-border-strong);
+  --ink: var(--os-ink);
+  --ink-soft: var(--os-ink-soft);
+  --ink-muted: var(--os-ink-muted);
+  --accent-rgb: 88, 217, 138;
+  --accent: var(--os-accent);
+  --accent-press: #44c477;
+  --accent-glow: rgba(var(--accent-rgb), 0.25);
+  --accent-surface: var(--os-accent-soft);
+  --accent-surface-strong: rgba(var(--accent-rgb), 0.14);
+  --accent-on: var(--os-accent-on);
+  --chip: var(--os-chip);
+  --card-hover: var(--os-card-hover);
+  --r-sm: var(--os-radius-sm);
+  --r-full: 9999px;
+  --shadow-lg: 0 20px 60px rgba(0, 0, 0, 0.55);
+  --t-fast: 150ms cubic-bezier(0.16, 1, 0.3, 1);
+  --t-normal: 200ms cubic-bezier(0.16, 1, 0.3, 1);
+  --error: #f87171;
+  --error-bg: rgba(248, 113, 113, 0.08);
+  --info: #60a5fa;
+  --warning: #fbbf24;
+  --r-full: 9999px;
+  --navbar-h: var(--os-navbar-h);
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+html,
+body,
+#root {
+  min-height: 100%;
+  background: var(--os-bg);
+}
+
+body {
+  margin: 0;
+  color: var(--os-ink);
+  font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #2a2a30;
+  border-radius: 999px;
+}
+
+.openstroid-header {
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 12px;
+  padding: 0 16px;
+  background: rgba(10, 10, 12, 0.97);
+  border-bottom: 1px solid var(--panel-border);
+}
+
+.openstroid-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  width: fit-content;
+  color: var(--os-ink);
+  text-decoration: none;
+}
+
+.openstroid-brand-mark {
+  display: flex;
+  align-items: center;
+  width: 34px;
+  height: 22px;
+  flex-shrink: 0;
+  filter: drop-shadow(0 2px 8px rgba(88, 217, 138, 0.25));
+}
+
+.openstroid-brand-mark img {
+  display: block;
+  width: 100%;
+  height: auto;
+  pointer-events: none;
+  user-select: none;
+}
+
+.openstroid-brand-copy {
+  font-size: 0.95rem;
+  letter-spacing: 0.01em;
+}
+
+.openstroid-nav {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+}
+
+.openstroid-nav-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 32px;
+  padding: 6px 12px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ink-muted);
+  font-size: 0.8rem;
+  font-weight: 500;
+  font-family: inherit;
+  text-decoration: none;
+  cursor: pointer;
+  outline: none;
+  transition: color var(--t-fast), background var(--t-fast);
+}
+
+.openstroid-nav-link:hover {
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--ink-soft);
+}
+
+.openstroid-nav-link[data-active="true"] {
+  background: rgba(255, 255, 255, 0.07);
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.openstroid-header-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+  min-width: 0;
+  position: relative;
+  z-index: 2;
+}
+
+.openstroid-header-chip {
+  display: none;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 9px;
+  border-radius: var(--r-full);
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--panel-border));
+  background: linear-gradient(180deg, rgba(var(--accent-rgb), 0.14), rgba(var(--accent-rgb), 0.05));
+  color: var(--ink-soft);
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  font-family: inherit;
+  cursor: default;
+}
+
+@media (min-width: 768px) {
+  .openstroid-header-chip {
+    display: inline-flex;
+  }
+}
+
+.openstroid-user-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  max-width: 230px;
+  padding: 4px 8px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ink-soft);
+  font-family: inherit;
+  cursor: pointer;
+  transition: background var(--t-fast), color var(--t-fast);
+}
+
+.openstroid-user-button:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.openstroid-user-avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 5px;
+  background: var(--chip);
+  color: var(--ink-muted);
+  font-size: 0.72rem;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+.openstroid-user-info {
+  display: none;
+  flex-direction: column;
+  align-items: flex-start;
+  min-width: 0;
+  gap: 0;
+  line-height: 1.2;
+  text-align: left;
+}
+
+@media (min-width: 576px) {
+  .openstroid-user-info {
+    display: flex;
+  }
+}
+
+.openstroid-user-name {
+  font-size: 0.78rem;
+  font-weight: 500;
+  color: var(--ink-soft);
+  max-width: 128px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  line-height: 1.2;
+}
+
+.openstroid-user-tier {
+  font-size: 0.6rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  line-height: 1;
+  color: var(--accent);
+}
+
+.openstroid-user-chevron {
+  color: var(--ink-muted);
+  flex-shrink: 0;
+}
+
+.openstroid-mobile-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.openstroid-mobile-nav .openstroid-nav-link {
+  justify-content: flex-start;
+  width: 100%;
+}
+
+.openstroid-main-inner {
+  width: 100%;
+  min-height: calc(100vh - var(--navbar-h));
+  padding: 20px;
+  background:
+    radial-gradient(900px 420px at 80% -10%, rgba(88, 217, 138, 0.045), transparent 68%),
+    linear-gradient(180deg, #090a0c 0%, #0f1013 100%);
+}
+
+.openstroid-page-actions {
+  flex-wrap: wrap;
+}
+
+.openstroid-toolbar {
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.openstroid-game-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 12px;
+  padding-bottom: 16px;
+}
+
+.openstroid-game-card {
+  position: relative;
+  background: var(--os-card);
+  border: 1px solid var(--os-border);
+  border-radius: var(--os-radius-md);
+  overflow: hidden;
+  cursor: pointer;
+  contain: layout style;
+  transition: transform 200ms cubic-bezier(0.16, 1, 0.3, 1), border-color 200ms cubic-bezier(0.16, 1, 0.3, 1);
+  transform: translate3d(0, 0, 0);
+}
+
+.openstroid-game-card::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0;
+  background: radial-gradient(120% 70% at 50% 0%, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0) 70%);
+  transition: opacity 200ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.openstroid-game-card:hover {
+  border-color: var(--os-border-strong);
+  transform: translate3d(0, -2px, 0) scale(1.01);
+}
+
+.openstroid-game-card:hover::after {
+  opacity: 1;
+}
+
+.openstroid-game-card-media {
+  position: relative;
+  aspect-ratio: 16 / 10;
+  overflow: hidden;
+}
+
+.openstroid-game-card-media img {
+  transition: transform 300ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.openstroid-game-card:hover .openstroid-game-card-media img {
+  transform: scale(1.03);
+}
+
+.openstroid-card-gradient {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(to bottom, transparent 26%, rgba(10, 10, 12, 0.48) 56%, rgba(10, 10, 12, 0.94) 100%);
+  z-index: 1;
+}
+
+.openstroid-card-action {
+  position: absolute;
+  z-index: 4;
+  top: 50%;
+  left: 50%;
+  width: 44px;
+  height: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 999px;
+  background: var(--os-accent);
+  color: var(--os-accent-on);
+  cursor: pointer;
+  opacity: 0;
+  pointer-events: none;
+  transform: translate(-50%, -50%) scale(0.96);
+  box-shadow: 0 4px 16px rgba(88, 217, 138, 0.25);
+  transition: opacity 200ms cubic-bezier(0.16, 1, 0.3, 1), transform 150ms cubic-bezier(0.16, 1, 0.3, 1), background 150ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.openstroid-card-action:hover {
+  background: #44c477;
+  transform: translate(-50%, -50%) scale(1.06);
+}
+
+.openstroid-game-card:hover .openstroid-card-action,
+.openstroid-game-card:focus-within .openstroid-card-action {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translate(-50%, -50%) scale(1);
+}
+
+.openstroid-card-info {
+  position: absolute;
+  inset: auto 0 0 0;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 12px;
+  pointer-events: none;
+}
+
+.openstroid-card-platform {
+  color: rgba(255, 255, 255, 0.65);
+  font-size: 0.72rem;
+  font-weight: 500;
+  line-height: 1.2;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.openstroid-card-title {
+  color: #fff;
+  font-size: 0.8rem;
+  font-weight: 600;
+  line-height: 1.3;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-shadow: 0 1px 4px rgba(0, 0, 0, 0.6);
+  white-space: nowrap;
+}
+
+.openstroid-card-state {
+  position: absolute;
+  left: 12px;
+  bottom: 41px;
+  z-index: 3;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 22px;
+  height: 22px;
+  border-radius: 4px;
+  border: 1px solid transparent;
+  background: var(--os-accent);
+  color: var(--os-accent-on);
+  font-size: 0.62rem;
+  font-weight: 800;
+  pointer-events: none;
+}
+
+.openstroid-app-main {
+  min-height: 100vh;
+  background:
+    radial-gradient(900px 420px at 80% -10%, rgba(var(--accent-rgb), 0.045), transparent 68%),
+    linear-gradient(180deg, #090a0c 0%, #0f1013 100%);
+}
+
+@media (max-width: 900px) {
+  .openstroid-header {
+    gap: 10px;
+  }
+
+  .openstroid-nav {
+    display: none;
+  }
+
+  .openstroid-main-inner {
+    padding: 16px 14px 28px;
+  }
+
+  .openstroid-game-grid {
+    grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  }
+
+}
+
+
+@media (max-width: 520px) {
+  .openstroid-brand-copy {
+    display: none;
+  }
+}
+
+@media (hover: none) {
+  .openstroid-card-action {
+    opacity: 1;
+    pointer-events: auto;
+    transform: translate(-50%, -50%) scale(1);
+  }
+}
