@@ -28,7 +28,7 @@ permissions:
 jobs:
   preflight:
     name: preflight
-    runs-on: ubuntu-24.04
+    runs-on: blacksmith-2vcpu-ubuntu-2404
     outputs:
       version: ${{ steps.release.outputs.version }}
       prerelease: ${{ steps.release.outputs.prerelease }}
@@ -95,7 +95,7 @@ jobs:
 
   prepare-source:
     name: prepare-source
-    runs-on: ubuntu-24.04
+    runs-on: blacksmith-2vcpu-ubuntu-2404
     needs: preflight
     permissions:
       contents: write
@@ -145,31 +145,31 @@ jobs:
       matrix:
         include:
           - label: windows-x64
-            os: windows-2025
+            os: blacksmith-2vcpu-windows-2025
             builder_args: "--win nsis portable --x64"
             artifact_paths: |
               dist-release/*-x64.exe
               dist-release/latest*.yml
               dist-release/*.blockmap
           - label: windows-arm64
-            os: windows-2025
+            os: blacksmith-2vcpu-windows-2025
             builder_args: "--win nsis portable --arm64"
             artifact_paths: |
               dist-release/*-arm64.exe
           - label: macos-x64
-            os: macos-15-intel
+            os: blacksmith-6vcpu-macos-15
             builder_args: "--mac dmg zip --x64"
             artifact_paths: |
               dist-release/*.dmg
               dist-release/*-x64.zip
           - label: macos-arm64
-            os: macos-15
+            os: blacksmith-6vcpu-macos-15
             builder_args: "--mac dmg zip --arm64"
             artifact_paths: |
               dist-release/*.dmg
               dist-release/*-arm64.zip
           - label: linux-x64
-            os: ubuntu-24.04
+            os: blacksmith-2vcpu-ubuntu-2404
             builder_args: "--linux AppImage deb --x64"
             artifact_paths: |
               dist-release/*-x86_64.AppImage
@@ -178,7 +178,7 @@ jobs:
               dist-release/*-linux-x64.deb
               dist-release/latest-linux.yml
           - label: linux-arm64
-            os: ubuntu-24.04-arm
+            os: blacksmith-2vcpu-ubuntu-2404-arm
             builder_args: "--linux AppImage deb --arm64"
             artifact_paths: |
               dist-release/*-arm64.AppImage
@@ -252,7 +252,7 @@ jobs:
 
   release:
     name: publish-release
-    runs-on: ubuntu-24.04
+    runs-on: blacksmith-2vcpu-ubuntu-2404
     needs:
       - preflight
       - prepare-source
