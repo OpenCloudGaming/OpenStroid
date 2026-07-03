@@ -5,6 +5,11 @@ import path from 'node:path';
 import { serverConfig } from '../config.js';
 import { createSession, type BridgeSession } from './session.js';
 import { decrypt, encrypt, sha256 } from './crypto.js';
+import {
+  ANDROID_TV_ENTRYPOINT_COOKIE,
+  androidTvRequestHeaders,
+  appendAndroidTvEntrypointCookie,
+} from './androidTvIdentity.js';
 
 const upstreamClient = axios.create({
   baseURL: serverConfig.upstreamBaseUrl,
@@ -47,6 +52,7 @@ interface PersistedCookieAuthStore {
 const refreshRequests = new Map<string, Promise<UpstreamTokens>>();
 const COOKIE_AUTH_PREFIX = 'cookie-auth:';
 const cookieAuthSessions = new Map<string, CookieAuthSession>();
+type UpstreamAuthInput = string | BridgeSession;
 
 function isFreshCookieSession(session: CookieAuthSession): boolean {
   const authCookies = session.cookies.filter((cookie) => (
@@ -140,11 +146,36 @@ export function getCookieAuthCookies(value: string): CookieAuthCookie[] {
   return cookieAuthSessions.get(value.slice(COOKIE_AUTH_PREFIX.length))?.cookies ?? [];
 }
 
-function upstreamAuthHeaders(accessToken: string): Record<string, string> {
+function getAccessToken(auth: UpstreamAuthInput): string {
+  return typeof auth === 'string' ? auth : auth.accessToken;
+}
+
+function usesAndroidTVIdentity(auth: UpstreamAuthInput): boolean {
+  return typeof auth !== 'string' && Boolean(auth.usesAndroidTVIdentity);
+}
+
+function getAuthDataToken(auth: UpstreamAuthInput): string {
+  if (typeof auth === 'string') return '';
+  if (typeof auth.userData === 'string') return auth.userData;
+  if (!auth.userData || typeof auth.userData !== 'object') return '';
+
+  const record = auth.userData as Record<string, unknown>;
+  for (const key of ['boosteroid_auth', 'boosteroidAuth', 'authorization_data', 'authorizationData']) {
+    const value = record[key];
+    if (typeof value === 'string' && value) return value;
+  }
+
+  return '';
+}
+
+function upstreamAuthHeaders(auth: UpstreamAuthInput): Record<string, string> {
+  const accessToken = getAccessToken(auth);
   const cookieHeader = readCookieAuthToken(accessToken);
+  let headers: Record<string, string>;
+
   if (cookieHeader) {
     const cookies = getCookieAuthCookies(accessToken);
-    const headers: Record<string, string> = {
+    headers = {
       Cookie: cookieHeader,
       Origin: serverConfig.upstreamBaseUrl,
       Referer: `${serverConfig.upstreamBaseUrl}/`,
@@ -157,36 +188,49 @@ function upstreamAuthHeaders(accessToken: string): Record<string, string> {
     if (boosteroidAuthCookie?.value) {
       headers['Authorization-Data'] = boosteroidAuthCookie.value;
     }
-    return headers;
+  } else {
+    headers = { Authorization: normalizeAuthorizationValue(accessToken) };
   }
 
-  return { Authorization: normalizeAuthorizationValue(accessToken) };
+  if (usesAndroidTVIdentity(auth)) {
+    headers = {
+      ...androidTvRequestHeaders(),
+      ...headers,
+      Cookie: appendAndroidTvEntrypointCookie(headers.Cookie),
+    };
+    const authDataToken = getAuthDataToken(auth);
+    if (authDataToken) {
+      headers['Authorization-Data'] = authDataToken;
+    }
+  }
+
+  return headers;
 }
 
-async function upstreamGet<T>(accessToken: string, path: string): Promise<T> {
+async function upstreamGet<T>(auth: UpstreamAuthInput, path: string): Promise<T> {
   const { data } = await upstreamClient.get(path, {
-    headers: upstreamAuthHeaders(accessToken),
+    headers: upstreamAuthHeaders(auth),
   });
   return data as T;
 }
 
-async function upstreamPost<T>(accessToken: string, path: string, body: unknown = {}): Promise<T> {
+async function upstreamPost<T>(auth: UpstreamAuthInput, path: string, body: unknown = {}): Promise<T> {
   const { data } = await upstreamClient.post(path, body, {
-    headers: upstreamAuthHeaders(accessToken),
+    headers: upstreamAuthHeaders(auth),
   });
   return data as T;
 }
 
-async function upstreamPatch<T>(accessToken: string, path: string, body: unknown = {}): Promise<T> {
+async function upstreamPatch<T>(auth: UpstreamAuthInput, path: string, body: unknown = {}): Promise<T> {
   const { data } = await upstreamClient.patch(path, body, {
-    headers: upstreamAuthHeaders(accessToken),
+    headers: upstreamAuthHeaders(auth),
   });
   return data as T;
 }
 
-async function upstreamDelete<T>(accessToken: string, path: string): Promise<T> {
+async function upstreamDelete<T>(auth: UpstreamAuthInput, path: string): Promise<T> {
   const { data } = await upstreamClient.delete(path, {
-    headers: upstreamAuthHeaders(accessToken),
+    headers: upstreamAuthHeaders(auth),
   });
   return data as T;
 }
@@ -292,111 +336,122 @@ export function normalizeError(error: unknown): { status: number; message: strin
   };
 }
 
-export async function getUpstreamUser(accessToken: string): Promise<Record<string, unknown>> {
-  const data = await upstreamGet<unknown>(accessToken, '/api/v1/user');
+export async function loginUpstream(payload: Record<string, string | boolean>): Promise<UpstreamTokens> {
+  const { data } = await upstreamClient.post('/api/v1/auth/login', payload);
+  const envelope = unwrapRecord(data);
+
+  return {
+    access_token: String(envelope.access_token ?? ''),
+    refresh_token: String(envelope.refresh_token ?? ''),
+    user_data: envelope.user_data,
+  };
+}
+
+export async function getUpstreamUser(auth: UpstreamAuthInput): Promise<Record<string, unknown>> {
+  const data = await upstreamGet<unknown>(auth, '/api/v1/user');
   return unwrapRecord(data);
 }
 
-export async function getInstalledGamesUpstream(accessToken: string, query?: Record<string, unknown>): Promise<unknown[]> {
-  const data = await upstreamGet<unknown>(accessToken, appendQuery('/api/v1/boostore/applications/installed', query));
+export async function getInstalledGamesUpstream(auth: UpstreamAuthInput, query?: Record<string, unknown>): Promise<unknown[]> {
+  const data = await upstreamGet<unknown>(auth, appendQuery('/api/v1/boostore/applications/installed', query));
   return unwrapArray(data);
 }
 
-export async function getApplicationUpstream(accessToken: string, appId: number): Promise<Record<string, unknown>> {
-  const data = await upstreamGet<unknown>(accessToken, `/api/v1/boostore/applications/${appId}`);
+export async function getApplicationUpstream(auth: UpstreamAuthInput, appId: number): Promise<Record<string, unknown>> {
+  const data = await upstreamGet<unknown>(auth, `/api/v1/boostore/applications/${appId}`);
   return unwrapRecord(data);
 }
 
-export async function getBoostoreApplicationsUpstream(accessToken: string, query?: Record<string, unknown>): Promise<unknown[]> {
-  const data = await upstreamGet<unknown>(accessToken, appendQuery('/api/v1/boostore/applications', query));
+export async function getBoostoreApplicationsUpstream(auth: UpstreamAuthInput, query?: Record<string, unknown>): Promise<unknown[]> {
+  const data = await upstreamGet<unknown>(auth, appendQuery('/api/v1/boostore/applications', query));
   return unwrapArray(data);
 }
 
-export async function searchBoostoreApplicationsUpstream(accessToken: string, query?: Record<string, unknown>): Promise<unknown[]> {
-  const data = await upstreamGet<unknown>(accessToken, appendQuery('/api/v1/boostore/applications/search', query));
+export async function searchBoostoreApplicationsUpstream(auth: UpstreamAuthInput, query?: Record<string, unknown>): Promise<unknown[]> {
+  const data = await upstreamGet<unknown>(auth, appendQuery('/api/v1/boostore/applications/search', query));
   return unwrapArray(data);
 }
 
-export async function getNewApplicationsUpstream(accessToken: string, query?: Record<string, unknown>): Promise<unknown[]> {
-  const data = await upstreamGet<unknown>(accessToken, appendQuery('/api/v1/boostore/applications/new', query));
+export async function getNewApplicationsUpstream(auth: UpstreamAuthInput, query?: Record<string, unknown>): Promise<unknown[]> {
+  const data = await upstreamGet<unknown>(auth, appendQuery('/api/v1/boostore/applications/new', query));
   return unwrapArray(data);
 }
 
-export async function getBoostoreCarouselUpstream(accessToken: string, query?: Record<string, unknown>): Promise<unknown[]> {
-  const data = await upstreamGet<unknown>(accessToken, appendQuery('/api/v1/boostore/carousel', query));
+export async function getBoostoreCarouselUpstream(auth: UpstreamAuthInput, query?: Record<string, unknown>): Promise<unknown[]> {
+  const data = await upstreamGet<unknown>(auth, appendQuery('/api/v1/boostore/carousel', query));
   return unwrapArray(data, ['slides', 'carousel']);
 }
 
-export async function getApplicationCollectionsUpstream(accessToken: string): Promise<unknown[]> {
-  const data = await upstreamGet<unknown>(accessToken, '/api/v1/boostore/applications/collections');
+export async function getApplicationCollectionsUpstream(auth: UpstreamAuthInput): Promise<unknown[]> {
+  const data = await upstreamGet<unknown>(auth, '/api/v1/boostore/applications/collections');
   return unwrapArray(data);
 }
 
-export async function getApplicationGenresUpstream(accessToken: string): Promise<unknown[]> {
-  const data = await upstreamGet<unknown>(accessToken, '/api/v1/boostore/applications/genres');
+export async function getApplicationGenresUpstream(auth: UpstreamAuthInput): Promise<unknown[]> {
+  const data = await upstreamGet<unknown>(auth, '/api/v1/boostore/applications/genres');
   return unwrapArray(data);
 }
 
-export async function getApplicationPlatformsUpstream(accessToken: string): Promise<unknown[]> {
-  const data = await upstreamGet<unknown>(accessToken, '/api/v1/boostore/applications/platforms');
+export async function getApplicationPlatformsUpstream(auth: UpstreamAuthInput): Promise<unknown[]> {
+  const data = await upstreamGet<unknown>(auth, '/api/v1/boostore/applications/platforms');
   return unwrapArray(data);
 }
 
-export async function getApplicationStoresUpstream(accessToken: string, store?: string): Promise<unknown[]> {
+export async function getApplicationStoresUpstream(auth: UpstreamAuthInput, store?: string): Promise<unknown[]> {
   const data = await upstreamGet<unknown>(
-    accessToken,
+    auth,
     appendQuery('/api/v1/boostore/applications/stores', store ? { store } : undefined),
   );
   return unwrapArray(data);
 }
 
-export async function getApplicationOrderByUpstream(accessToken: string): Promise<unknown[]> {
-  const data = await upstreamGet<unknown>(accessToken, '/api/v1/boostore/applications/filters/order-by');
+export async function getApplicationOrderByUpstream(auth: UpstreamAuthInput): Promise<unknown[]> {
+  const data = await upstreamGet<unknown>(auth, '/api/v1/boostore/applications/filters/order-by');
   return unwrapArray(data);
 }
 
-export async function installApplicationUpstream(accessToken: string, appId: number): Promise<Record<string, unknown>> {
-  const data = await upstreamPatch<unknown>(accessToken, `/api/v1/boostore/applications/installed/${appId}`, {});
+export async function installApplicationUpstream(auth: UpstreamAuthInput, appId: number): Promise<Record<string, unknown>> {
+  const data = await upstreamPatch<unknown>(auth, `/api/v1/boostore/applications/installed/${appId}`, {});
   return unwrapRecord(data);
 }
 
-export async function uninstallApplicationUpstream(accessToken: string, appId: number): Promise<Record<string, unknown>> {
-  const data = await upstreamDelete<unknown>(accessToken, `/api/v1/boostore/applications/installed/${appId}`);
+export async function uninstallApplicationUpstream(auth: UpstreamAuthInput, appId: number): Promise<Record<string, unknown>> {
+  const data = await upstreamDelete<unknown>(auth, `/api/v1/boostore/applications/installed/${appId}`);
   return unwrapRecord(data);
 }
 
 export async function synchronizeInstalledApplicationUpstream(
-  accessToken: string,
+  auth: UpstreamAuthInput,
   platform: string,
 ): Promise<Record<string, unknown>> {
   const data = await upstreamPost<unknown>(
-    accessToken,
+    auth,
     `/api/v1/boostore/applications/installed/synchronize/${encodeURIComponent(platform)}`,
     {},
   );
   return unwrapRecord(data);
 }
 
-export async function getLastSynchronizeUpstream(accessToken: string, platform: string): Promise<Record<string, unknown>> {
+export async function getLastSynchronizeUpstream(auth: UpstreamAuthInput, platform: string): Promise<Record<string, unknown>> {
   const data = await upstreamGet<unknown>(
-    accessToken,
+    auth,
     `/api/v1/boostore/applications/installed/synchronize/${encodeURIComponent(platform)}`,
   );
   return unwrapRecord(data);
 }
 
-export async function getActiveSubscriptionsUpstream(accessToken: string): Promise<unknown[]> {
-  const data = await upstreamGet<unknown>(accessToken, '/api/v1/payments/subscriptions/active');
+export async function getActiveSubscriptionsUpstream(auth: UpstreamAuthInput): Promise<unknown[]> {
+  const data = await upstreamGet<unknown>(auth, '/api/v1/payments/subscriptions/active');
   return unwrapArray(data, ['subscriptions']);
 }
 
-export async function getUserLanguagesUpstream(accessToken: string): Promise<unknown[]> {
-  const data = await upstreamGet<unknown>(accessToken, '/api/v1/user/languages');
+export async function getUserLanguagesUpstream(auth: UpstreamAuthInput): Promise<unknown[]> {
+  const data = await upstreamGet<unknown>(auth, '/api/v1/user/languages');
   return unwrapArray(data, ['languages']);
 }
 
-export async function getStreamingGatewaysUpstream(accessToken: string): Promise<unknown[]> {
-  const data = await upstreamGet<unknown>(accessToken, '/api/v1/streaming/gateways');
+export async function getStreamingGatewaysUpstream(auth: UpstreamAuthInput): Promise<unknown[]> {
+  const data = await upstreamGet<unknown>(auth, '/api/v1/streaming/gateways');
   if (Array.isArray(data)) return data;
   if (data && typeof data === 'object' && Array.isArray((data as { data?: unknown[] }).data)) {
     return (data as { data: unknown[] }).data;
@@ -404,85 +459,96 @@ export async function getStreamingGatewaysUpstream(accessToken: string): Promise
   return [];
 }
 
-export async function getStreamingSessionDetailsUpstream(accessToken: string, sessionId: string): Promise<Record<string, unknown>> {
+export async function getStreamingSessionDetailsUpstream(auth: UpstreamAuthInput, sessionId: string): Promise<Record<string, unknown>> {
   const data = await upstreamPost<unknown>(
-    accessToken,
+    auth,
     `/api/v1/streaming/session/details?sessionId=${encodeURIComponent(sessionId)}`,
     null,
   );
   return unwrapRecord(data);
 }
 
-export async function enqueueStreamingSessionUpstream(accessToken: string, appId: number): Promise<Record<string, unknown>> {
-  const data = await upstreamPost<unknown>(accessToken, '/api/v2/streaming/session/enqueue', { appId });
+export async function enqueueStreamingSessionUpstream(auth: UpstreamAuthInput, appId: number): Promise<Record<string, unknown>> {
+  const data = await upstreamPost<unknown>(auth, '/api/v2/streaming/session/enqueue', { appId });
   return unwrapRecord(data);
 }
 
-export async function dequeueStreamingSessionUpstream(accessToken: string): Promise<Record<string, unknown>> {
-  const data = await upstreamPost<unknown>(accessToken, '/api/v2/streaming/session/dequeue', {});
+export async function dequeueStreamingSessionUpstream(auth: UpstreamAuthInput): Promise<Record<string, unknown>> {
+  const data = await upstreamPost<unknown>(auth, '/api/v2/streaming/session/dequeue', {});
   return unwrapRecord(data);
 }
 
 export async function postStreamingSessionLogUpstream(
-  accessToken: string,
+  auth: UpstreamAuthInput,
   payload: Record<string, unknown>,
 ): Promise<Record<string, unknown>> {
-  const data = await upstreamPost<unknown>(accessToken, '/api/v1/streaming/session/log', payload);
+  const data = await upstreamPost<unknown>(auth, '/api/v1/streaming/session/log', payload);
   return unwrapRecord(data);
 }
 
 export async function submitStreamingSessionEvaluationUpstream(
-  accessToken: string,
+  auth: UpstreamAuthInput,
   payload: Record<string, unknown>,
 ): Promise<Record<string, unknown>> {
-  const data = await upstreamPost<unknown>(accessToken, '/api/v1/streaming/session/evaluation', payload);
+  const data = await upstreamPost<unknown>(auth, '/api/v1/streaming/session/evaluation', payload);
   return unwrapRecord(data);
 }
 
-export async function getLastSessionUpstream(accessToken: string): Promise<Record<string, unknown>> {
-  const data = await upstreamGet<unknown>(accessToken, '/api/v1/streaming/user/last-session');
+export async function getLastSessionUpstream(auth: UpstreamAuthInput): Promise<Record<string, unknown>> {
+  const data = await upstreamGet<unknown>(auth, '/api/v1/streaming/user/last-session');
   return unwrapRecord(data);
 }
 
-export async function getLastSessionLiveUpstream(accessToken: string): Promise<Record<string, unknown>> {
-  const data = await upstreamGet<unknown>(accessToken, '/api/v1/streaming/user/last-session/live');
+export async function getLastSessionLiveUpstream(auth: UpstreamAuthInput): Promise<Record<string, unknown>> {
+  const data = await upstreamGet<unknown>(auth, '/api/v1/streaming/user/last-session/live');
   return unwrapRecord(data);
 }
 
-export async function getActiveSessionsUpstream(accessToken: string): Promise<Record<string, unknown>> {
-  const data = await upstreamGet<unknown>(accessToken, '/api/v1/streaming/user/active-sessions');
+export async function getActiveSessionsUpstream(auth: UpstreamAuthInput): Promise<Record<string, unknown>> {
+  const data = await upstreamGet<unknown>(auth, '/api/v1/streaming/user/active-sessions');
   return unwrapRecord(data);
 }
 
-export async function startStreamingSessionV1Upstream(accessToken: string, appId: number): Promise<Record<string, unknown>> {
-  const data = await upstreamPost<unknown>(accessToken, '/api/v1/streaming/session/start', { appId });
+export async function startStreamingSessionV1Upstream(auth: UpstreamAuthInput, appId: number): Promise<Record<string, unknown>> {
+  const data = await upstreamPost<unknown>(auth, '/api/v1/streaming/session/start', { appId });
   return unwrapRecord(data);
 }
 
-export async function startStreamingSessionV2Upstream(accessToken: string, appId: number, sessionToken: string): Promise<Record<string, unknown>> {
-  const data = await upstreamPost<unknown>(accessToken, '/api/v2/streaming/session/start', { appId, sessionToken });
+export async function startStreamingSessionV2Upstream(auth: UpstreamAuthInput, appId: number, sessionToken: string): Promise<Record<string, unknown>> {
+  const data = await upstreamPost<unknown>(auth, '/api/v2/streaming/session/start', { appId, sessionToken });
   return unwrapRecord(data);
 }
 
-export async function logoutUpstream(accessToken: string): Promise<void> {
+export async function logoutUpstream(auth: UpstreamAuthInput): Promise<void> {
   await upstreamClient.post(
     '/api/v2/auth/logout',
     {},
     {
-      headers: upstreamAuthHeaders(accessToken),
+      headers: upstreamAuthHeaders(auth),
     },
   );
 }
 
-async function refreshUpstream(refreshToken: string): Promise<UpstreamTokens> {
-  const { data } = await upstreamClient.post('/api/v1/auth/refresh-token', {
-    refresh_token: refreshToken,
-  });
+async function refreshUpstream(session: BridgeSession): Promise<UpstreamTokens> {
+  const { data } = await upstreamClient.post(
+    '/api/v1/auth/refresh-token',
+    {
+      refresh_token: session.refreshToken,
+    },
+    {
+      headers: session.usesAndroidTVIdentity
+        ? {
+            ...androidTvRequestHeaders(),
+            Cookie: ANDROID_TV_ENTRYPOINT_COOKIE,
+          }
+        : undefined,
+    },
+  );
   const envelope = unwrapRecord(data);
 
   return {
     access_token: String(envelope.access_token ?? ''),
-    refresh_token: String(envelope.refresh_token ?? refreshToken),
+    refresh_token: String(envelope.refresh_token ?? session.refreshToken),
     user_data: envelope.user_data,
   };
 }
@@ -492,7 +558,7 @@ async function refreshSession(session: BridgeSession): Promise<BridgeSession> {
   let request = refreshRequests.get(lockKey);
 
   if (!request) {
-    request = refreshUpstream(session.refreshToken).finally(() => {
+    request = refreshUpstream(session).finally(() => {
       refreshRequests.delete(lockKey);
     });
     refreshRequests.set(lockKey, request);
@@ -509,12 +575,12 @@ async function refreshSession(session: BridgeSession): Promise<BridgeSession> {
 
 export async function withRefresh<T>(
   session: BridgeSession,
-  operation: (accessToken: string) => Promise<T>,
+  operation: (session: BridgeSession) => Promise<T>,
 ): Promise<{ session: BridgeSession; result: T }> {
   try {
     return {
       session,
-      result: await operation(session.accessToken),
+      result: await operation(session),
     };
   } catch (error) {
     const isUnauthorized = error instanceof AxiosError ? error.response?.status === 401 : false;
@@ -524,7 +590,7 @@ export async function withRefresh<T>(
     }
 
     const refreshedSession = await refreshSession(session);
-    const result = await operation(refreshedSession.accessToken);
+    const result = await operation(refreshedSession);
     return { session: refreshedSession, result };
   }
 }

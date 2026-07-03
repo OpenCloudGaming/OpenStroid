@@ -7,6 +7,9 @@ export interface BridgeSession {
   refreshToken: string;
   userData?: unknown;
   user?: Record<string, unknown>;
+  sessionId?: string | null;
+  expiresAt?: number | null;
+  usesAndroidTVIdentity?: boolean;
   createdAt: number;
   updatedAt: number;
 }
@@ -47,6 +50,9 @@ export function createSession(input: {
   refreshToken: string;
   userData?: unknown;
   user?: Record<string, unknown>;
+  sessionId?: string | null;
+  expiresAt?: number | null;
+  usesAndroidTVIdentity?: boolean;
   existing?: BridgeSession | null;
 }): BridgeSession {
   const now = Date.now();
@@ -55,6 +61,9 @@ export function createSession(input: {
     refreshToken: input.refreshToken,
     userData: input.userData ?? input.existing?.userData,
     user: input.user ?? input.existing?.user,
+    sessionId: input.sessionId !== undefined ? input.sessionId : input.existing?.sessionId,
+    expiresAt: input.expiresAt !== undefined ? input.expiresAt : input.existing?.expiresAt,
+    usesAndroidTVIdentity: input.usesAndroidTVIdentity ?? input.existing?.usesAndroidTVIdentity,
     createdAt: input.existing?.createdAt ?? now,
     updatedAt: now,
   };

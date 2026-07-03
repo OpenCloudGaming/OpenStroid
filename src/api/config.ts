@@ -25,6 +25,9 @@ function normalizeApiBaseUrl(rawValue: string | undefined): string {
 export const API_CONFIG = {
   baseUrl: normalizeApiBaseUrl(import.meta.env.VITE_API_BASE_URL),
   endpoints: {
+    qrLoginStart: '/auth/login/qr/start',
+    qrLoginStatus: '/auth/login/qr/status',
+    qrLoginCancel: '/auth/login/qr/cancel',
     loginStart: '/auth/login/start',
     loginStatus: '/auth/login/status',
     loginCancel: '/auth/login/cancel',
