@@ -8,7 +8,25 @@ const electronDir = path.join(__dirname, '..', 'node_modules', 'electron');
 const { version } = require(path.join(electronDir, 'package.json'));
 const distPath = path.join(electronDir, 'dist');
 const pathFile = path.join(electronDir, 'path.txt');
-const platformPath = process.platform === 'win32' ? 'electron.exe' : 'electron';
+const platformPath = getPlatformPath();
+
+function getPlatformPath() {
+  const platform = process.env.npm_config_platform || process.platform;
+
+  switch (platform) {
+    case 'darwin':
+    case 'mas':
+      return 'Electron.app/Contents/MacOS/Electron';
+    case 'win32':
+      return 'electron.exe';
+    case 'freebsd':
+    case 'openbsd':
+    case 'linux':
+      return 'electron';
+    default:
+      throw new Error(`Electron builds are not available on platform: ${platform}`);
+  }
+}
 
 function isInstalled() {
   try {
