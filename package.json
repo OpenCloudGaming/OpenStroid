@@ -89,8 +89,15 @@
       "build/server/**",
       "package.json"
     ],
+    "extraResources": [
+      {
+        "from": "assets/icons",
+        "to": "assets/icons"
+      }
+    ],
     "asar": true,
     "win": {
+      "icon": "assets/icons/icon.ico",
       "target": [
         "nsis",
         "portable"
@@ -103,6 +110,7 @@
       "artifactName": "OpenStroid-v${version}-portable-${arch}.${ext}"
     },
     "mac": {
+      "icon": "assets/icons/icon.icns",
       "target": [
         "dmg",
         "zip"
@@ -111,6 +119,7 @@
       "artifactName": "OpenStroid-v${version}-mac-${arch}.${ext}"
     },
     "linux": {
+      "icon": "assets/icons",
       "target": [
         "AppImage",
         "deb"

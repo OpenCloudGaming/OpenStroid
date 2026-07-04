@@ -10,6 +10,15 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const preloadPath = path.join(__dirname, 'preload.cjs');
 
+// In dev (tsx), __dirname is the electron/ source folder so we go up one level.
+// In a packaged build, icons are copied to process.resourcesPath via extraResources.
+// On Windows we use icon.ico so the taskbar gets all the embedded sizes it needs.
+// On other platforms a PNG is fine.
+const iconFile = process.platform === 'win32' ? 'icon.ico' : '256x256.png';
+const appIcon = app.isPackaged
+  ? path.join(process.resourcesPath, 'assets', 'icons', iconFile)
+  : path.join(__dirname, '..', 'assets', 'icons', iconFile);
+
 let bridgePort = serverConfig.port;
 const pendingStreamLaunches = new Map<string, StreamLaunchPayload>();
 const streamLaunchIdsByWebContents = new Map<number, string>();
@@ -120,6 +129,7 @@ function createMainWindow() {
     title: 'OpenStroid',
     autoHideMenuBar: true,
     backgroundColor: '#11131a',
+    icon: appIcon,
     webPreferences: {
       preload: preloadPath,
       contextIsolation: true,
