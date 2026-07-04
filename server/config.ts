@@ -14,9 +14,12 @@ function parseBoolean(value: string | undefined, fallback: boolean): boolean {
 const nodeEnv = process.env.NODE_ENV ?? 'development';
 const configDir = import.meta.dirname;
 const buildServerSuffix = `${path.sep}build${path.sep}server${path.sep}server`;
+const electronBuildServerSuffix = `${path.sep}build${path.sep}electron${path.sep}server`;
 const projectRoot = configDir.endsWith(buildServerSuffix)
+  || configDir.endsWith(electronBuildServerSuffix)
   ? path.resolve(configDir, '..', '..', '..')
   : path.resolve(configDir, '..');
+const runtimeDir = process.env.OPENSTROID_RUNTIME_DIR ?? path.resolve(projectRoot, '.runtime');
 
 export const serverConfig = {
   nodeEnv,
@@ -31,6 +34,6 @@ export const serverConfig = {
   appOrigin: process.env.APP_ORIGIN,
   cookieAuthStorePath:
     process.env.COOKIE_AUTH_STORE_PATH ??
-    path.resolve(projectRoot, '.runtime', 'cookie-auth-sessions.json'),
+    path.resolve(runtimeDir, 'cookie-auth-sessions.json'),
   distDir: path.resolve(projectRoot, 'dist'),
 } as const;

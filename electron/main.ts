@@ -3,14 +3,12 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import { app, BrowserWindow, ipcMain, session, shell } from 'electron';
-import { startBridgeServer } from '../server/app.js';
-import { serverConfig } from '../server/config.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const preloadPath = path.join(__dirname, 'preload.cjs');
 
-let bridgePort = serverConfig.port;
+let bridgePort = 3001;
 const pendingStreamLaunches = new Map<string, StreamLaunchPayload>();
 const streamLaunchIdsByWebContents = new Map<number, string>();
 
@@ -138,6 +136,10 @@ function createMainWindow() {
 }
 
 async function bootstrapDesktopApp() {
+  const { startBridgeServer } = await import('../server/app.js');
+  const { serverConfig } = await import('../server/config.js');
+
+  bridgePort = serverConfig.port;
   const server = await startBridgeServer(serverConfig.port);
   const address = server.address();
   if (address && typeof address !== 'string') {
@@ -164,10 +166,20 @@ async function bootstrapDesktopApp() {
   });
 }
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   app.setName('OpenStroid');
   if (process.platform === 'win32') {
     app.setAppUserModelId('ai.capy.openstroid');
   }
-  void bootstrapDesktopApp();
+
+  if (app.isPackaged) {
+    process.env.NODE_ENV = 'production';
+    process.env.OPENSTROID_RUNTIME_DIR ??= app.getPath('userData');
+    process.env.COOKIE_SECURE ??= 'false';
+  }
+
+  await bootstrapDesktopApp();
+}).catch((error: unknown) => {
+  console.error('[main] failed to start OpenStroid', error);
+  app.quit();
 });
