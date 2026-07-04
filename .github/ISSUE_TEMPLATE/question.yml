@@ -1,0 +1,17 @@
+name: Question
+description: Ask a question about OpenStroid
+labels: ["question"]
+body:
+  - type: textarea
+    id: question
+    attributes:
+      label: Your Question
+      placeholder: What would you like to know?
+    validations:
+      required: true
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Context (optional)
+      description: OS, version, what you've tried, etc.

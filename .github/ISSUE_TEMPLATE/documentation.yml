@@ -1,0 +1,11 @@
+name: Documentation
+description: Report missing or incorrect documentation
+labels: ["documentation"]
+body:
+  - type: textarea
+    id: description
+    attributes:
+      label: What needs to be documented or fixed?
+      placeholder: Describe the documentation issue...
+    validations:
+      required: true
