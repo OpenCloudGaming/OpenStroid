@@ -77,6 +77,7 @@
         "repo": "OpenStroid"
       }
     ],
+    "icon": "logo.png",
     "npmRebuild": false,
     "nodeGypRebuild": false,
     "buildDependenciesFromSource": false,

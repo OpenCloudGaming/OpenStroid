@@ -108,8 +108,8 @@ body {
 .openstroid-brand-mark {
   display: flex;
   align-items: center;
-  width: 34px;
-  height: 22px;
+  width: 32px;
+  height: 32px;
   flex-shrink: 0;
   filter: drop-shadow(0 2px 8px rgba(88, 217, 138, 0.25));
 }
@@ -117,9 +117,16 @@ body {
 .openstroid-brand-mark img {
   display: block;
   width: 100%;
-  height: auto;
+  height: 100%;
+  object-fit: contain;
   pointer-events: none;
   user-select: none;
+}
+
+.openstroid-login-logo {
+  width: 56px;
+  height: 56px;
+  filter: drop-shadow(0 3px 12px rgba(88, 217, 138, 0.3));
 }
 
 .openstroid-brand-copy {

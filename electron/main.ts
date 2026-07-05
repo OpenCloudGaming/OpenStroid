@@ -2,7 +2,7 @@ import type { AddressInfo } from 'node:net';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
-import { app, BrowserWindow, ipcMain, session, shell } from 'electron';
+import { app, BrowserWindow, ipcMain, nativeImage, session, shell } from 'electron';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -109,7 +109,14 @@ function registerIpcHandlers() {
   });
 }
 
+function resolveAppLogoPath(): string {
+  return app.isPackaged
+    ? path.join(app.getAppPath(), 'dist', 'logo.png')
+    : path.join(app.getAppPath(), 'public', 'logo.png');
+}
+
 function createMainWindow() {
+  const appIcon = nativeImage.createFromPath(resolveAppLogoPath());
   const window = new BrowserWindow({
     width: 1440,
     height: 960,
@@ -118,6 +125,7 @@ function createMainWindow() {
     title: 'OpenStroid',
     autoHideMenuBar: true,
     backgroundColor: '#11131a',
+    ...(appIcon.isEmpty() ? {} : { icon: appIcon }),
     webPreferences: {
       preload: preloadPath,
       contextIsolation: true,
