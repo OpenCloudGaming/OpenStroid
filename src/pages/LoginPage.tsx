@@ -206,9 +206,12 @@ export function LoginPage() {
       <Center w="100%" p="lg">
         <Stack gap="lg" w="100%" maw={1080}>
           <Group gap="sm" justify="center">
-            <ThemeIcon size={56} radius={8} color="cyan" variant="filled">
-              <IconQrcode size={30} />
-            </ThemeIcon>
+            <Image
+              src="/logo.png"
+              alt="OpenStroid logo"
+              className="openstroid-login-logo"
+              fit="contain"
+            />
             <Stack gap={0}>
               <Title order={1} fw={800} size="h2">OpenStroid Desktop</Title>
               <Text c="dimmed" size="sm">Sign in with Boosteroid QR code</Text>

@@ -81,7 +81,7 @@ export function AuthenticatedLayout() {
               onClick={closeMobileNav}
             >
               <span className="openstroid-brand-mark">
-                <img src="/opennow-logo-mark.png" alt="" aria-hidden="true" draggable={false} />
+                <img src="/logo.png" alt="" aria-hidden="true" draggable={false} />
               </span>
               <span className="openstroid-brand-copy">
                 <Text fw={700} size="sm" c="white" lh={1.1}>
