@@ -1,11 +1,15 @@
 {
   description = "OpenStroid";
 
-  inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+  inputs = {
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+    nixpkgs-electron.url = "github:NixOS/nixpkgs/nixos-25.11";
+  };
 
   outputs = {
     self,
     nixpkgs,
+    nixpkgs-electron,
   }: let
     supportedSystems = [
       "x86_64-linux"
@@ -15,9 +19,23 @@
     ];
     forAllSystems = nixpkgs.lib.genAttrs supportedSystems;
     pkgsFor = system: import nixpkgs {inherit system;};
+    electronPkgsFor = system:
+      import nixpkgs-electron {
+        inherit system;
+        config.permittedInsecurePackages = ["electron-37.10.3"];
+      };
+    linuxElectronConfig = pkgs: electronPackage: {
+      packages = pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [electronPackage];
+      env = pkgs.lib.optionalString pkgs.stdenv.hostPlatform.isLinux ''
+        export ELECTRON_SKIP_BINARY_DOWNLOAD=1
+        export ELECTRON_OVERRIDE_DIST_PATH="${electronPackage}/bin"
+        export npm_config_electron_skip_binary_download=true
+      '';
+    };
   in {
     devShells = forAllSystems (system: let
       pkgs = pkgsFor system;
+      linuxElectron = linuxElectronConfig pkgs (electronPkgsFor system).electron_37;
     in {
       default = pkgs.mkShell {
         packages = with pkgs;
@@ -27,8 +45,8 @@
             pkg-config
             python3
           ]
+          ++ linuxElectron.packages
           ++ lib.optionals stdenv.hostPlatform.isLinux [
-            electron
             fakeroot
             rpm
             ruby
@@ -39,16 +57,13 @@
             export ELECTRON_CACHE="$PWD/.cache/electron"
             export ELECTRON_BUILDER_CACHE="$PWD/.cache/electron-builder"
           ''
-          + pkgs.lib.optionalString pkgs.stdenv.hostPlatform.isLinux ''
-            export ELECTRON_SKIP_BINARY_DOWNLOAD=1
-            export ELECTRON_OVERRIDE_DIST_PATH="${pkgs.electron}/bin"
-            export npm_config_electron_skip_binary_download=true
-          '';
+          + linuxElectron.env;
       };
     });
 
     apps = forAllSystems (system: let
       pkgs = pkgsFor system;
+      linuxElectron = linuxElectronConfig pkgs (electronPkgsFor system).electron_37;
       openstroidDev = pkgs.writeShellApplication {
         name = "openstroid-dev";
         runtimeInputs =
@@ -56,13 +71,9 @@
             pkgs.bun
             pkgs.nodejs_22
           ]
-          ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [pkgs.electron];
+          ++ linuxElectron.packages;
         text =
-          pkgs.lib.optionalString pkgs.stdenv.hostPlatform.isLinux ''
-            export ELECTRON_SKIP_BINARY_DOWNLOAD=1
-            export ELECTRON_OVERRIDE_DIST_PATH="${pkgs.electron}/bin"
-            export npm_config_electron_skip_binary_download=true
-          ''
+          linuxElectron.env
           + ''
             exec bun run dev "$@"
           '';

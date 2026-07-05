@@ -20,6 +20,7 @@ jobs:
   preflight:
     name: preflight
     runs-on: blacksmith-2vcpu-ubuntu-2404
+    timeout-minutes: 15
     outputs:
       nightly_id: ${{ steps.nightly.outputs.nightly_id }}
       nightly_version: ${{ steps.nightly.outputs.nightly_version }}
@@ -49,6 +50,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           ref: ${{ inputs.branch }}
+          persist-credentials: false
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -78,6 +80,7 @@ jobs:
     name: ${{ matrix.label }}
     runs-on: ${{ matrix.os }}
     needs: preflight
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
@@ -130,12 +133,14 @@ jobs:
       NIGHTLY_VERSION: ${{ needs.preflight.outputs.nightly_version }}
       npm_config_audit: "false"
       npm_config_fund: "false"
+      USE_SYSTEM_FPM: ${{ matrix.label == 'linux-arm64' && 'true' || 'false' }}
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
           ref: ${{ needs.preflight.outputs.source_sha }}
+          persist-credentials: false
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
