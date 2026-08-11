@@ -83,7 +83,7 @@ interface RealtimeQueueListener {
   close(): void;
 }
 
-export async function createBridgeApp() {
+async function createBridgeApp() {
   const app = express();
 
   app.set('trust proxy', 1);

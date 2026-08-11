@@ -46,7 +46,6 @@
   --error-bg: rgba(248, 113, 113, 0.08);
   --info: #60a5fa;
   --warning: #fbbf24;
-  --r-full: 9999px;
   --navbar-h: var(--os-navbar-h);
 }
 
@@ -286,6 +285,12 @@ body {
   gap: 6px;
 }
 
+@media (min-width: 901px) {
+  .openstroid-mobile-menu-button {
+    display: none;
+  }
+}
+
 .openstroid-mobile-nav .openstroid-nav-link {
   justify-content: flex-start;
   width: 100%;
@@ -309,6 +314,17 @@ body {
   border: 0;
   border-radius: 0;
   background: transparent;
+}
+
+.openstroid-filter-scroll {
+  max-width: 100%;
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+
+.openstroid-catalog-actions {
+  min-width: 0;
+  max-width: 100%;
 }
 
 .openstroid-game-grid {
@@ -477,6 +493,17 @@ body {
 
   .openstroid-game-grid {
     grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  }
+
+  .openstroid-toolbar,
+  .openstroid-catalog-actions {
+    align-items: stretch;
+    width: 100%;
+  }
+
+  .openstroid-filter-scroll {
+    flex: 1 1 100%;
+    width: 100%;
   }
 
 }

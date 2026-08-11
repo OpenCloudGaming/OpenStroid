@@ -6,7 +6,7 @@ const GAMEPAD_LISTENER_DELAY_MS = 2000;
 const PS5_DUPLICATE_HID =
   'HID-compliant game controller (STANDARD GAMEPAD Vendor: 054c Product: 0ce6)';
 
-export type StreamPlatform = 'win' | 'mac' | 'lin' | 'a';
+type StreamPlatform = 'win' | 'mac' | 'lin' | 'a';
 
 export interface GamepadControllerOptions {
   sendEvent: (data: Record<string, unknown>) => void;

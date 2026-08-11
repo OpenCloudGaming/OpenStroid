@@ -68,7 +68,7 @@ export function AuthenticatedLayout() {
             <Burger
               opened={mobileNavOpened}
               onClick={toggleMobileNav}
-              hiddenFrom="sm"
+              className="openstroid-mobile-menu-button"
               size="sm"
               color="var(--os-ink-soft)"
               aria-label="Open navigation"

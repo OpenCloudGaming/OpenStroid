@@ -93,6 +93,8 @@ function registerIpcHandlers() {
 
     await installStreamCookies(launch.cookies);
     console.log(`[main] open stream requested session=${launch.streamClientConfig && typeof launch.streamClientConfig === 'object' && 'sessionId' in launch.streamClientConfig ? String(launch.streamClientConfig.sessionId) : 'unknown'}`);
+    const previousStreamLaunchId = streamLaunchIdsByWebContents.get(event.sender.id);
+    if (previousStreamLaunchId) pendingStreamLaunches.delete(previousStreamLaunchId);
     const streamLaunchId = randomUUID();
     pendingStreamLaunches.set(streamLaunchId, launch);
     streamLaunchIdsByWebContents.set(event.sender.id, streamLaunchId);
@@ -104,6 +106,8 @@ function registerIpcHandlers() {
   ipcMain.handle('openstroid:get-stream-launch', (event) => {
     const streamLaunchId = streamLaunchIdsByWebContents.get(event.sender.id);
     const launch = streamLaunchId ? (pendingStreamLaunches.get(streamLaunchId) ?? null) : null;
+    if (streamLaunchId) pendingStreamLaunches.delete(streamLaunchId);
+    streamLaunchIdsByWebContents.delete(event.sender.id);
     console.log(`[main] stream launch lookup webContents=${event.sender.id} launchId=${streamLaunchId ?? 'none'} found=${Boolean(launch)}`);
     return launch;
   });

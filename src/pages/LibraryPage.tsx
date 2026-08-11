@@ -1,5 +1,5 @@
 import { Link } from 'react-router-dom';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActionIcon,
   Alert,
@@ -37,173 +37,29 @@ import {
 } from '@tabler/icons-react';
 import {
   getGameDetails,
-  getLibraryDashboard,
+  getInstalledGames,
   launchStream,
   synchronizePlatform,
 } from '../api';
-import type { InstalledGame, LibraryDashboard } from '../types';
-import { describeLaunchError } from '../lib/gameUtils';
+import type { InstalledGame } from '../types';
+import {
+  coerceGame,
+  describeLaunchError,
+  imageUrl,
+  isControllerFriendly,
+  isFree,
+  matchesSearch,
+  sortGames,
+  storeLabel,
+  uniqueGames,
+  type SortKey,
+} from '../lib/gameUtils';
 
 type LoadState = 'loading' | 'success' | 'error';
 type FilterKey = 'all' | 'installed' | 'controller' | 'free' | 'recent';
-type SortKey = 'name' | 'recent' | 'store';
-
-const EMPTY_DASHBOARD: LibraryDashboard = {
-  user: null,
-  installedGames: [],
-  catalogGames: [],
-  newGames: [],
-  carousel: [],
-  facets: {
-    collections: [],
-    genres: [],
-    platforms: [],
-    orderBy: [],
-    languages: [],
-  },
-  account: {
-    subscriptions: [],
-  },
-  sessions: {
-    active: null,
-    last: null,
-  },
-  generatedAt: '',
-};
-
-function recordFrom(value: unknown): Record<string, unknown> {
-  return value && typeof value === 'object' ? value as Record<string, unknown> : {};
-}
-
-function firstString(record: Record<string, unknown>, keys: string[]): string {
-  for (const key of keys) {
-    const value = record[key];
-    if (typeof value === 'string' && value.trim()) return value.trim();
-  }
-  return '';
-}
-
-function firstNumber(record: Record<string, unknown>, keys: string[]): number {
-  for (const key of keys) {
-    const value = record[key];
-    const numberValue = typeof value === 'number' ? value : Number(value);
-    if (Number.isFinite(numberValue) && numberValue > 0) return numberValue;
-  }
-  return 0;
-}
-
-function nestedGameRecord(value: unknown): Record<string, unknown> {
-  const record = recordFrom(value);
-  for (const key of ['application', 'app', 'game', 'item']) {
-    const nested = recordFrom(record[key]);
-    if (Object.keys(nested).length > 0) return nested;
-  }
-  return record;
-}
-
-function coerceGame(value: unknown): InstalledGame | null {
-  const source = nestedGameRecord(value);
-  const id = firstNumber(source, ['id', 'appId', 'applicationId', 'gameId']);
-  const fallback = recordFrom(value);
-  const fallbackId = firstNumber(fallback, ['id', 'appId', 'applicationId', 'gameId']);
-  const gameId = id || fallbackId;
-  if (!gameId) return null;
-
-  const name = firstString(source, ['name', 'title', 'displayName']) ||
-    firstString(fallback, ['name', 'title', 'displayName']) ||
-    `Application ${gameId}`;
-
-  return {
-    ...fallback,
-    ...source,
-    id: gameId,
-    name,
-  } as InstalledGame;
-}
-
-function uniqueGames(values: Array<InstalledGame | null>): InstalledGame[] {
-  const seen = new Set<number>();
-  return values.filter((game): game is InstalledGame => {
-    if (!game || seen.has(game.id)) return false;
-    seen.add(game.id);
-    return true;
-  });
-}
-
-function imageUrl(game: InstalledGame): string {
-  const record = recordFrom(game);
-  const direct = firstString(record, [
-    'cover',
-    'coverUrl',
-    'image',
-    'imageUrl',
-    'poster',
-    'posterUrl',
-    'background',
-    'backgroundImage',
-    'icon',
-    'logo',
-  ]);
-  if (direct) return direct;
-
-  for (const key of ['media', 'images', 'assets']) {
-    const value = record[key];
-    if (Array.isArray(value)) {
-      const found = value.map(recordFrom).map((item) => firstString(item, ['url', 'src', 'imageUrl'])).find(Boolean);
-      if (found) return found;
-    }
-  }
-
-  return '';
-}
-
-function storeLabel(game: InstalledGame): string {
-  const record = recordFrom(game);
-  const platform = recordFrom(record.platform);
-  const store = recordFrom(record.store);
-  return firstString(store, ['name', 'title', 'slug']) ||
-    firstString(platform, ['name', 'title', 'slug']) ||
-    firstString(record, ['store', 'platform', 'platformName']) ||
-    'Cloud';
-}
-
-function isControllerFriendly(game: InstalledGame): boolean {
-  const text = JSON.stringify(game).toLowerCase();
-  return text.includes('controller') || text.includes('gamepad') || text.includes('xinput');
-}
-
-function isFree(game: InstalledGame): boolean {
-  const record = recordFrom(game);
-  const monetizeType = firstString(record, ['monetizeType', 'monetization', 'priceType']).toLowerCase();
-  if (monetizeType.includes('free')) return true;
-  if (record.isFree === true || record.free === true) return true;
-  const price = Number(record.price ?? record.priceValue);
-  return Number.isFinite(price) && price === 0;
-}
-
-function dateScore(game: InstalledGame): number {
-  const record = recordFrom(game);
-  const raw = firstString(record, ['lastPlayedAt', 'installedAt', 'updatedAt', 'releaseDate', 'createdAt']);
-  const parsed = Date.parse(raw);
-  return Number.isFinite(parsed) ? parsed : 0;
-}
-
-function matchesSearch(game: InstalledGame, query: string): boolean {
-  const needle = query.trim().toLowerCase();
-  if (!needle) return true;
-  return `${game.name} ${game.slug ?? ''} ${storeLabel(game)}`.toLowerCase().includes(needle);
-}
-
-function sortGames(games: InstalledGame[], sort: SortKey): InstalledGame[] {
-  return [...games].sort((a, b) => {
-    if (sort === 'recent') return dateScore(b) - dateScore(a);
-    if (sort === 'store') return storeLabel(a).localeCompare(storeLabel(b));
-    return a.name.localeCompare(b.name);
-  });
-}
 
 export function MyGamesPage() {
-  const [dashboard, setDashboard] = useState<LibraryDashboard>(EMPTY_DASHBOARD);
+  const [games, setGames] = useState<InstalledGame[]>([]);
   const [loadState, setLoadState] = useState<LoadState>('loading');
   const [errorMsg, setErrorMsg] = useState('');
   const [launchingGameId, setLaunchingGameId] = useState<number | null>(null);
@@ -216,32 +72,26 @@ export function MyGamesPage() {
   const [isDetailLoading, setIsDetailLoading] = useState(false);
   const [syncingPlatform, setSyncingPlatform] = useState<string | null>(null);
   const [syncMessage, setSyncMessage] = useState('');
+  const detailsRequestId = useRef(0);
 
-  const fetchDashboard = useCallback(async () => {
+  const fetchLibrary = useCallback(async () => {
     setLoadState('loading');
     setErrorMsg('');
     try {
-      const data = await getLibraryDashboard();
-      setDashboard({
-        ...EMPTY_DASHBOARD,
-        ...data,
-        facets: { ...EMPTY_DASHBOARD.facets, ...data.facets },
-        account: { ...EMPTY_DASHBOARD.account, ...data.account },
-        sessions: { ...EMPTY_DASHBOARD.sessions, ...data.sessions },
-      });
+      setGames(await getInstalledGames());
       setLoadState('success');
     } catch (err: unknown) {
       const msg =
         (err as { response?: { data?: { message?: string } } })?.response?.data?.message ||
-        'Failed to load the Boosteroid dashboard data.';
+        'Failed to load your Boosteroid library.';
       setErrorMsg(msg);
       setLoadState('error');
     }
   }, []);
 
   const installedGames = useMemo(
-    () => uniqueGames((dashboard.installedGames ?? []).map(coerceGame)),
-    [dashboard.installedGames],
+    () => uniqueGames(games.map(coerceGame)),
+    [games],
   );
   const installedIds = useMemo(() => new Set(installedGames.map((game) => game.id)), [installedGames]);
 
@@ -276,14 +126,23 @@ export function MyGamesPage() {
   }, []);
 
   const openDetails = useCallback(async (game: InstalledGame) => {
+    const requestId = ++detailsRequestId.current;
     setSelectedGame(game);
     setIsDetailLoading(true);
     try {
-      const details = await getGameDetails(game.id);
-      if (details) setSelectedGame({ ...game, ...details, id: game.id, name: details.name || game.name });
+      const details = await getGameDetails(game.id).catch(() => null);
+      if (details && detailsRequestId.current === requestId) {
+        setSelectedGame({ ...game, ...details, id: game.id, name: details.name || game.name });
+      }
     } finally {
-      setIsDetailLoading(false);
+      if (detailsRequestId.current === requestId) setIsDetailLoading(false);
     }
+  }, []);
+
+  const closeDetails = useCallback(() => {
+    detailsRequestId.current += 1;
+    setSelectedGame(null);
+    setIsDetailLoading(false);
   }, []);
 
   const handleSync = useCallback(async (platform: string) => {
@@ -292,7 +151,7 @@ export function MyGamesPage() {
     try {
       await synchronizePlatform(platform);
       setSyncMessage(`${platform} synchronization started.`);
-      await fetchDashboard();
+      await fetchLibrary();
     } catch (err: unknown) {
       const msg =
         (err as { response?: { data?: { message?: string } } })?.response?.data?.message ||
@@ -301,14 +160,14 @@ export function MyGamesPage() {
     } finally {
       setSyncingPlatform(null);
     }
-  }, [fetchDashboard]);
+  }, [fetchLibrary]);
 
   useEffect(() => {
     const handle = window.setTimeout(() => {
-      void fetchDashboard();
+      void fetchLibrary();
     }, 0);
     return () => window.clearTimeout(handle);
-  }, [fetchDashboard]);
+  }, [fetchLibrary]);
 
   return (
     <Box maw={1440} mx="auto">
@@ -344,8 +203,8 @@ export function MyGamesPage() {
             ))}
           </Menu.Dropdown>
         </Menu>
-        <Tooltip label="Refresh dashboard">
-          <ActionIcon variant="light" color="gray" size="lg" onClick={() => void fetchDashboard()}>
+        <Tooltip label="Refresh library">
+          <ActionIcon variant="light" color="gray" size="lg" onClick={() => void fetchLibrary()}>
             <IconRefresh size={18} />
           </ActionIcon>
         </Tooltip>
@@ -354,10 +213,10 @@ export function MyGamesPage() {
       {loadState === 'loading' && <LibrarySkeleton />}
 
       {loadState === 'error' && (
-        <Alert icon={<IconAlertCircle size={20} />} title="Could not load dashboard" color="red" variant="light" radius="md">
+        <Alert icon={<IconAlertCircle size={20} />} title="Could not load library" color="red" variant="light" radius="md">
           <Stack gap="sm">
             <Text size="sm">{errorMsg}</Text>
-            <Button variant="light" color="red" size="xs" w="fit-content" onClick={() => void fetchDashboard()} leftSection={<IconRefresh size={14} />}>
+            <Button variant="light" color="red" size="xs" w="fit-content" onClick={() => void fetchLibrary()} leftSection={<IconRefresh size={14} />}>
               Try again
             </Button>
           </Stack>
@@ -405,16 +264,18 @@ export function MyGamesPage() {
                 w={{ base: '100%', xs: 150 }}
               />
             </Group>
-            <SegmentedControl
-              value={filter}
-              onChange={(value) => setFilter(value as FilterKey)}
-              data={[
-                { value: 'installed', label: 'All' },
-                { value: 'recent', label: 'Recent' },
-                { value: 'controller', label: 'Controller' },
-                { value: 'free', label: 'Free' },
-              ]}
-            />
+            <Box className="openstroid-filter-scroll">
+              <SegmentedControl
+                value={filter}
+                onChange={(value) => setFilter(value as FilterKey)}
+                data={[
+                  { value: 'installed', label: 'All' },
+                  { value: 'recent', label: 'Recent' },
+                  { value: 'controller', label: 'Controller' },
+                  { value: 'free', label: 'Free' },
+                ]}
+              />
+            </Box>
           </Group>
 
           {visibleGames.length === 0 ? (
@@ -441,7 +302,7 @@ export function MyGamesPage() {
         isLoading={isDetailLoading}
         installed={selectedGame ? installedIds.has(selectedGame.id) : false}
         isLaunching={selectedGame ? launchingGameId === selectedGame.id : false}
-        onClose={() => setSelectedGame(null)}
+        onClose={closeDetails}
         onLaunch={handleLaunch}
       />
     </Box>
@@ -471,6 +332,7 @@ function GameCard({
       tabIndex={0}
       onClick={() => void onDetails(game)}
       onKeyDown={(event) => {
+        if (event.target !== event.currentTarget) return;
         if (event.key === 'Enter' || event.key === ' ') {
           event.preventDefault();
           void onDetails(game);
@@ -543,7 +405,7 @@ function GameDetailsDrawer({
           </Box>
           {isLoading && <Skeleton h={48} />}
           <Text size="sm" c="dimmed">
-            {String(game.description ?? game.shortDescription ?? 'No description was provided by the upstream dashboard response.')}
+            {String(game.description ?? game.shortDescription ?? 'No description was provided by Boosteroid for this game.')}
           </Text>
           <Divider />
           <SimpleGrid cols={2}>
@@ -601,7 +463,7 @@ function EmptyLibrary() {
         <Stack gap={4} align="center">
           <Title order={3} fw={600} ta="center">No games match this view</Title>
           <Text c="dimmed" size="sm" ta="center">
-            Adjust search or filters, then refresh the captured Boosteroid dashboard data.
+            Adjust the search or filters, then refresh your Boosteroid library.
           </Text>
         </Stack>
       </Stack>

@@ -1,9 +1,0 @@
-.loginInput {
-  background-color: var(--mantine-color-dark-7);
-  border-color: var(--mantine-color-dark-4);
-}
-
-.loginInput:focus,
-.loginInput:focus-within {
-  border-color: var(--mantine-color-brand-5);
-}

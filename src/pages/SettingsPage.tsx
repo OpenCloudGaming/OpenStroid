@@ -1,4 +1,6 @@
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
+import '../styles/settings.css';
+import '../styles/settings-overrides.css';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import {
   Check,
   Gauge,
@@ -76,13 +78,18 @@ export function SettingsPage({ onClose }: SettingsPageProps) {
   const [statusMessage, setStatusMessage] = useState('');
   const [activeSection, setActiveSection] = useState<SettingsSectionId>('stream');
   const [settingsSearch, setSettingsSearch] = useState('');
+  const savedIndicatorTimer = useRef<number | null>(null);
 
   const flashSaved = useCallback((message?: string) => {
+    if (savedIndicatorTimer.current !== null) {
+      window.clearTimeout(savedIndicatorTimer.current);
+    }
     if (message) setStatusMessage(message);
     setSavedIndicator(true);
-    window.setTimeout(() => {
+    savedIndicatorTimer.current = window.setTimeout(() => {
       setSavedIndicator(false);
       setStatusMessage('');
+      savedIndicatorTimer.current = null;
     }, 1500);
   }, []);
 
@@ -119,6 +126,12 @@ export function SettingsPage({ onClose }: SettingsPageProps) {
       document.body.style.overflow = previousOverflow;
     };
   }, [onClose]);
+
+  useEffect(() => () => {
+    if (savedIndicatorTimer.current !== null) {
+      window.clearTimeout(savedIndicatorTimer.current);
+    }
+  }, []);
 
   const searchQuery = settingsSearch.trim().toLowerCase();
   const showAll = searchQuery.length > 0;
@@ -161,6 +174,7 @@ export function SettingsPage({ onClose }: SettingsPageProps) {
             onClick={onClose}
             title="Close"
             aria-label="Close settings"
+            data-autofocus
           >
             <X size={18} />
           </button>

@@ -1,10 +1,8 @@
 import axios, { AxiosError } from 'axios';
 import fs from 'node:fs';
-import { randomUUID } from 'node:crypto';
-import path from 'node:path';
 import { serverConfig } from '../config.js';
 import { createSession, type BridgeSession } from './session.js';
-import { decrypt, encrypt, sha256 } from './crypto.js';
+import { decrypt, sha256 } from './crypto.js';
 import {
   ANDROID_TV_ENTRYPOINT_COOKIE,
   androidTvRequestHeaders,
@@ -20,7 +18,7 @@ const upstreamClient = axios.create({
   },
 });
 
-export interface UpstreamTokens {
+interface UpstreamTokens {
   access_token: string;
   refresh_token: string;
   user_data?: unknown;
@@ -80,43 +78,9 @@ function loadPersistedCookieAuthSessions(): void {
   }
 }
 
-function persistCookieAuthSessions(): void {
-  const sessions = Object.fromEntries(
-    [...cookieAuthSessions.entries()].filter(([, session]) => isFreshCookieSession(session)),
-  );
-
-  fs.mkdirSync(path.dirname(serverConfig.cookieAuthStorePath), { recursive: true });
-  fs.writeFileSync(serverConfig.cookieAuthStorePath, encrypt({ version: 1, sessions }), 'utf8');
-}
-
 loadPersistedCookieAuthSessions();
 
-export function restoreCookieAuthToken(value: string, cookieHeader: string, cookies: CookieAuthCookie[] = []): boolean {
-  if (!value.startsWith(COOKIE_AUTH_PREFIX) || !cookieHeader) {
-    return false;
-  }
-
-  const id = value.slice(COOKIE_AUTH_PREFIX.length);
-  const now = Date.now();
-  cookieAuthSessions.set(id, {
-    cookieHeader,
-    cookies,
-    createdAt: cookieAuthSessions.get(id)?.createdAt ?? now,
-    updatedAt: now,
-  });
-  persistCookieAuthSessions();
-  return true;
-}
-
-export function createCookieAuthToken(cookieHeader: string, cookies: CookieAuthCookie[] = []): string {
-  const id = randomUUID();
-  const now = Date.now();
-  cookieAuthSessions.set(id, { cookieHeader, cookies, createdAt: now, updatedAt: now });
-  persistCookieAuthSessions();
-  return `${COOKIE_AUTH_PREFIX}${id}`;
-}
-
-export function readCookieAuthToken(value: string): string | null {
+function readCookieAuthToken(value: string): string | null {
   if (!value.startsWith(COOKIE_AUTH_PREFIX)) {
     return null;
   }
@@ -333,17 +297,6 @@ export function normalizeError(error: unknown): { status: number; message: strin
   return {
     status: 500,
     message: error instanceof Error ? error.message : 'Unexpected server error',
-  };
-}
-
-export async function loginUpstream(payload: Record<string, string | boolean>): Promise<UpstreamTokens> {
-  const { data } = await upstreamClient.post('/api/v1/auth/login', payload);
-  const envelope = unwrapRecord(data);
-
-  return {
-    access_token: String(envelope.access_token ?? ''),
-    refresh_token: String(envelope.refresh_token ?? ''),
-    user_data: envelope.user_data,
   };
 }
 

@@ -5,9 +5,7 @@ import type {
   AuthSession,
   InstalledGame,
   LibraryFacet,
-  LibraryDashboard,
   QRCodeLoginSessionStatus,
-  StreamSessionResponse,
   StreamLaunchResponse,
   User,
 } from '../types';
@@ -50,23 +48,19 @@ export async function getSession(): Promise<AuthSession> {
   return extractSession(data);
 }
 
-export async function getCurrentUser(): Promise<User | null> {
-  const session = await getSession();
-  return session.user;
-}
-
 export async function getInstalledGames(): Promise<InstalledGame[]> {
   const { data } = await apiClient.get(API_CONFIG.endpoints.installedGames);
   if (Array.isArray(data?.games)) return data.games as InstalledGame[];
   return [];
 }
 
-export async function getLibraryDashboard(): Promise<LibraryDashboard> {
-  const { data } = await apiClient.get(API_CONFIG.endpoints.libraryDashboard);
-  return data as LibraryDashboard;
-}
-
-export async function getLibraryFacets(): Promise<LibraryDashboard['facets']> {
+export async function getLibraryFacets(): Promise<{
+  collections: LibraryFacet[];
+  genres: LibraryFacet[];
+  platforms: LibraryFacet[];
+  orderBy: LibraryFacet[];
+  languages: LibraryFacet[];
+}> {
   const { data } = await apiClient.get(API_CONFIG.endpoints.libraryFacets);
   return {
     collections: Array.isArray(data?.collections) ? data.collections as LibraryFacet[] : [],
@@ -85,12 +79,6 @@ export async function getCatalogGames(params: Record<string, unknown> = {}): Pro
 
 export async function searchCatalogGames(params: Record<string, unknown> = {}): Promise<InstalledGame[]> {
   const { data } = await apiClient.get(API_CONFIG.endpoints.librarySearch, { params });
-  if (Array.isArray(data?.games)) return data.games as InstalledGame[];
-  return [];
-}
-
-export async function getNewGames(params: Record<string, unknown> = {}): Promise<InstalledGame[]> {
-  const { data } = await apiClient.get(API_CONFIG.endpoints.libraryNew, { params });
   if (Array.isArray(data?.games)) return data.games as InstalledGame[];
   return [];
 }
@@ -125,20 +113,6 @@ export async function dequeueStreamSession(): Promise<Record<string, unknown>> {
   return (data?.result ?? {}) as Record<string, unknown>;
 }
 
-export async function getActiveStreamSessions(): Promise<StreamSessionResponse> {
-  const { data } = await apiClient.get(API_CONFIG.endpoints.streamActiveSessions);
-  return data as StreamSessionResponse;
-}
-
-export async function getLastStreamSession(): Promise<StreamSessionResponse> {
-  const { data } = await apiClient.get(API_CONFIG.endpoints.streamLastSession);
-  return data as StreamSessionResponse;
-}
-
 export async function logStreamSession(payload: Record<string, unknown>): Promise<void> {
   await apiClient.post(API_CONFIG.endpoints.streamSessionLog, payload);
-}
-
-export async function submitStreamSessionEvaluation(payload: Record<string, unknown>): Promise<void> {
-  await apiClient.post(API_CONFIG.endpoints.streamSessionEvaluation, payload);
 }

@@ -2,7 +2,7 @@ import type { CookieOptions, Request, Response } from 'express';
 import { serverConfig } from '../config.js';
 import { decrypt, encrypt } from './crypto.js';
 
-export const SESSION_HANDOFF_HEADER = 'x-openstroid-session';
+const SESSION_HANDOFF_HEADER = 'x-openstroid-session';
 
 export interface BridgeSession {
   accessToken: string;

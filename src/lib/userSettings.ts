@@ -38,7 +38,7 @@ export interface AppSettings {
   stream: StreamDefaults;
 }
 
-export const DEFAULT_SETTINGS: AppSettings = {
+const DEFAULT_SETTINGS: AppSettings = {
   stream: {
     volume: 70,
     muted: false,
@@ -54,7 +54,9 @@ export const DEFAULT_SETTINGS: AppSettings = {
 };
 
 function readNumber(key: string, fallback: number, min: number, max?: number): number {
-  const value = Number(window.localStorage.getItem(key));
+  const raw = window.localStorage.getItem(key);
+  if (raw === null || raw.trim() === '') return fallback;
+  const value = Number(raw);
   if (!Number.isFinite(value)) return fallback;
   const clamped = Math.max(value, min);
   return max === undefined ? clamped : Math.min(clamped, max);

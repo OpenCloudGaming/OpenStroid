@@ -24,6 +24,7 @@ type StreamStatus =
   | 'Control socket connected'
   | 'Starting WebRTC'
   | 'Streaming'
+  | 'Failed'
   | 'Disconnected'
   | 'Connection degraded';
 
@@ -431,6 +432,9 @@ export class OpenStroidStreamClient {
   private gatewayCodec = '';
   private gateways: unknown[] = [];
   private remoteIceTimer: number | null = null;
+  private remoteIcePollingGeneration = 0;
+  private connectionGeneration = 0;
+  private terminalFailure = false;
   private statsTimer: number | null = null;
   private remoteIceDedup = new Set<string>();
 
@@ -581,6 +585,8 @@ export class OpenStroidStreamClient {
 
   async connect(config: StreamClientConfig) {
     await this.disconnect(true);
+    const connectionGeneration = this.connectionGeneration;
+    this.terminalFailure = false;
     this.currentConfig = config;
     this.log(`Launch config: session=${config.sessionId} gateways=${config.gateways?.length ?? 0} queries=${config.sessionQueries?.length ?? 0}`);
     const queries = (config.sessionQueries ?? []).filter((query) => typeof query === 'string' && query.trim());
@@ -601,14 +607,17 @@ export class OpenStroidStreamClient {
     this.setStatus('Preparing');
     this.log(`Session ${this.sessionId}`);
     this.gatewayHost = normalizeGatewayHost(await this.resolveGateway(config.homeUrl));
+    if (this.connectionGeneration !== connectionGeneration) return;
     this.webrtcApiBase = `https://${normalizeWebRtcApiHost(this.gatewayHost)}/webrtc`;
     this.log(`Resolved gateway ${this.gatewayHost}; queryLength=${this.sessionQuery.length}`);
 
     await this.openControlWebSocket();
+    if (this.connectionGeneration !== connectionGeneration) return;
     this.installBaseInputHandlers();
   }
 
   async disconnect(silent = false) {
+    this.connectionGeneration += 1;
     this.fullInputRelease('disconnect');
     this.uninstallBaseInputHandlers();
     this.stopStatsLoop();
@@ -617,7 +626,9 @@ export class OpenStroidStreamClient {
     if (this.ws?.readyState === WebSocket.OPEN) {
       this.sendEvent({ type: 'settings', action: 'terminating' });
     }
-    this.ws?.close(1000, 'Disconnected by OpenStroid');
+    if (this.ws && this.ws.readyState !== WebSocket.CLOSED) {
+      this.ws.close(1000, 'Disconnected by OpenStroid');
+    }
     this.ws = null;
 
     this.dataChannel?.close();
@@ -714,15 +725,32 @@ export class OpenStroidStreamClient {
       };
       ws.onerror = () => {
         this.log('Control socket error');
-        if (!settled) reject(new Error('Control socket failed to open.'));
-        this.setStatus('Connection degraded');
+        if (!settled) {
+          this.terminalFailure = true;
+          reject(new Error('Control socket failed to open.'));
+          return;
+        }
+        if (this.ws === ws) this.setStatus('Connection degraded');
       };
       ws.onclose = (event) => {
+        if (this.ws !== ws) return;
+        this.ws = null;
         this.log(`Control socket closed (${event.code})`);
-        this.setStatus('Disconnected');
+        if (!settled) {
+          this.terminalFailure = true;
+          reject(new Error(`Control socket closed before opening (${event.code}).`));
+          return;
+        }
+        if (!this.terminalFailure) this.setStatus('Disconnected');
       };
       ws.onmessage = (event) => {
-        void this.handleControlMessage(String(event.data));
+        if (this.ws !== ws) return;
+        void this.handleControlMessage(String(event.data)).catch((error: unknown) => {
+          this.terminalFailure = true;
+          this.setStatus('Failed');
+          this.log(error instanceof Error ? error.message : 'Stream setup failed');
+          void this.disconnect(true);
+        });
       };
     });
   }
@@ -1385,14 +1413,22 @@ export class OpenStroidStreamClient {
   // === Keyboard (unchanged behavior aside from full-release hooks) ===
 
   private handleKeyDown = (event: KeyboardEvent) => {
+    if (event.key === 'Tab' || this.isKeyboardControlFocused()) return;
     event.preventDefault();
     this.sendKeyboardButton(mapKeyCode(event), true);
   };
 
   private handleKeyUp = (event: KeyboardEvent) => {
+    if (event.key === 'Tab' || this.isKeyboardControlFocused()) return;
     event.preventDefault();
     this.sendKeyboardButton(mapKeyCode(event), false);
   };
+
+  private isKeyboardControlFocused() {
+    const activeElement = document.activeElement;
+    if (!(activeElement instanceof HTMLElement)) return false;
+    return Boolean(activeElement.closest('button, input, select, textarea, a, [role="dialog"], [contenteditable="true"]'));
+  }
 
   // === Focus / visibility / fullscreen ===
 
@@ -1606,11 +1642,14 @@ export class OpenStroidStreamClient {
 
   private async startWebRtcTransport() {
     if (this.pc) return;
+    const connectionGeneration = this.connectionGeneration;
     this.setStatus('Starting WebRTC');
     this.log('Starting WebRTC transport');
 
     this.peerId = crypto.randomUUID();
-    const pc = new RTCPeerConnection({ iceServers: await this.fetchIceServers() });
+    const iceServers = await this.fetchIceServers();
+    if (this.connectionGeneration !== connectionGeneration) return;
+    const pc = new RTCPeerConnection({ iceServers });
     this.pc = pc;
 
     try {
@@ -1654,6 +1693,7 @@ export class OpenStroidStreamClient {
     pc.onconnectionstatechange = () => {
       this.log(`WebRTC ${pc.connectionState}`);
       if (pc.connectionState === 'connected') {
+        this.stopRemoteIcePolling();
         this.setStatus('Streaming');
         this.sendEvent({ type: 'settings', action: 'ready' });
         this.sendEvent({ type: 'stream', action: 'page', is_visible: !document.hidden });
@@ -1663,6 +1703,11 @@ export class OpenStroidStreamClient {
         this.setStatus('Connection degraded');
       }
     };
+    pc.oniceconnectionstatechange = () => {
+      if (pc.iceConnectionState === 'connected' || pc.iceConnectionState === 'completed') {
+        this.stopRemoteIcePolling();
+      }
+    };
 
     const offer = await pc.createOffer({
       offerToReceiveAudio: true,
@@ -1670,10 +1715,26 @@ export class OpenStroidStreamClient {
     });
     this.log(`Created WebRTC offer length=${offer.sdp?.length ?? 0}`);
     offer.sdp = await this.prepareOfferSdp(offer.sdp ?? '');
+    if (this.connectionGeneration !== connectionGeneration) {
+      pc.close();
+      return;
+    }
     await pc.setLocalDescription(offer);
+    if (this.connectionGeneration !== connectionGeneration) {
+      pc.close();
+      return;
+    }
     const answer = await this.sendOffer(offer);
+    if (this.connectionGeneration !== connectionGeneration) {
+      pc.close();
+      return;
+    }
     this.log(`Received WebRTC answer length=${answer.sdp.length}`);
     await pc.setRemoteDescription(answer);
+    if (this.connectionGeneration !== connectionGeneration) {
+      pc.close();
+      return;
+    }
     this.startRemoteIcePolling();
   }
 
@@ -1794,13 +1855,20 @@ export class OpenStroidStreamClient {
 
   private startRemoteIcePolling() {
     this.stopRemoteIcePolling();
-    this.remoteIceTimer = window.setInterval(() => {
-      void this.fetchRemoteIceCandidates();
-    }, 500);
+    const generation = ++this.remoteIcePollingGeneration;
+    const poll = async () => {
+      await this.fetchRemoteIceCandidates();
+      if (this.remoteIcePollingGeneration !== generation) return;
+      this.remoteIceTimer = window.setTimeout(() => {
+        void poll();
+      }, 500);
+    };
+    void poll();
   }
 
   private stopRemoteIcePolling() {
-    if (this.remoteIceTimer !== null) window.clearInterval(this.remoteIceTimer);
+    this.remoteIcePollingGeneration += 1;
+    if (this.remoteIceTimer !== null) window.clearTimeout(this.remoteIceTimer);
     this.remoteIceTimer = null;
   }
 
