@@ -110,8 +110,8 @@ try {
 
   await page.goto(`${origin}/settings`);
   await page.getByRole('dialog', { name: 'Settings' }).waitFor();
-  assert.equal(await page.getByText('20 Mbps', { exact: true }).count(), 1, 'Fresh profiles did not use the default stream bitrate');
-  assert.equal(await page.getByText('70%', { exact: true }).count(), 1, 'Fresh profiles did not use the default stream volume');
+  await page.getByText('20 Mbps', { exact: true }).waitFor();
+  await page.getByText('70%', { exact: true }).waitFor();
   assert.equal(await page.evaluate(() => document.activeElement?.getAttribute('aria-label')), 'Close settings');
   await page.keyboard.press('Escape');
   await page.getByRole('dialog', { name: 'Settings' }).waitFor({ state: 'detached' });
