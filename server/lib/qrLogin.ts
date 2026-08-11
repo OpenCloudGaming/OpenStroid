@@ -14,7 +14,7 @@ const SYNC_ENDPOINT = '/api/v1/auth/login/qr-code/sync';
 const VALIDATION_ENDPOINT = '/api/v1/auth/login/qr-code/validate';
 const TERMINAL_STATUSES = new Set<QRCodeLoginStatus>(['succeeded', 'cancelled', 'timed_out']);
 
-export type QRCodeLoginStatus = 'polling' | 'succeeded' | 'cancelled' | 'timed_out';
+type QRCodeLoginStatus = 'polling' | 'succeeded' | 'cancelled' | 'timed_out';
 
 export interface QRCodeLoginArtifact {
   id: string;
@@ -162,7 +162,7 @@ function createQRCodeSessionFromPayload(payload: unknown): BridgeSession {
   });
 }
 
-export class QRCodeLoginManager {
+class QRCodeLoginManager {
   private active: QRCodeLoginRuntime | null = null;
   private latest: QRCodeLoginArtifact | null = null;
 

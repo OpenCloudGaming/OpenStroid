@@ -2,11 +2,11 @@ import type { InstalledGame } from '../types';
 
 export type SortKey = 'name' | 'recent' | 'store';
 
-export function recordFrom(value: unknown): Record<string, unknown> {
+function recordFrom(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' ? value as Record<string, unknown> : {};
 }
 
-export function firstString(record: Record<string, unknown>, keys: string[]): string {
+function firstString(record: Record<string, unknown>, keys: string[]): string {
   for (const key of keys) {
     const value = record[key];
     if (typeof value === 'string' && value.trim()) return value.trim();
@@ -113,7 +113,7 @@ export function isFree(game: InstalledGame): boolean {
   return Number.isFinite(price) && price === 0;
 }
 
-export function dateScore(game: InstalledGame): number {
+function dateScore(game: InstalledGame): number {
   const record = recordFrom(game);
   const raw = firstString(record, ['lastPlayedAt', 'installedAt', 'updatedAt', 'releaseDate', 'createdAt']);
   const parsed = Date.parse(raw);

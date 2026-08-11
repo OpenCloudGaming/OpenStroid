@@ -1,5 +1,6 @@
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
+import { FocusTrap } from '@mantine/core';
 
 interface SettingsModalHostProps {
   open: boolean;
@@ -9,6 +10,7 @@ interface SettingsModalHostProps {
 
 export function SettingsModalHost({ open, onClose, children }: SettingsModalHostProps) {
   const [contentReady, setContentReady] = useState(false);
+  const previousFocus = useRef<HTMLElement | null>(null);
 
   useEffect(() => {
     if (!open) {
@@ -24,6 +26,17 @@ export function SettingsModalHost({ open, onClose, children }: SettingsModalHost
     return () => window.cancelAnimationFrame(frame);
   }, [open]);
 
+  useEffect(() => {
+    if (!open) return undefined;
+    previousFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const appRoot = document.getElementById('root');
+    appRoot?.setAttribute('inert', '');
+    return () => {
+      appRoot?.removeAttribute('inert');
+      previousFocus.current?.focus();
+    };
+  }, [open]);
+
   if (!open || typeof document === 'undefined') {
     return null;
   }
@@ -35,14 +48,17 @@ export function SettingsModalHost({ open, onClose, children }: SettingsModalHost
         className="animated-modal-scrim"
         onClick={onClose}
         aria-label="Close settings"
+        tabIndex={-1}
       />
 
-      <div
-        className="animated-modal-panel settings-modal"
-        onClick={(event) => event.stopPropagation()}
-      >
-        {contentReady ? children : <div className="settings-modal-placeholder" aria-hidden />}
-      </div>
+      <FocusTrap active={contentReady}>
+        <div
+          className="animated-modal-panel settings-modal"
+          onClick={(event) => event.stopPropagation()}
+        >
+          {contentReady ? children : <div className="settings-modal-placeholder" aria-hidden />}
+        </div>
+      </FocusTrap>
     </div>,
     document.body,
   );

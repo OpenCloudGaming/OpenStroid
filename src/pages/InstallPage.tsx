@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActionIcon,
   Alert,
@@ -54,7 +54,7 @@ import {
   type SortKey,
 } from '../lib/gameUtils';
 
-type LoadState = 'idle' | 'loading' | 'success' | 'error';
+type LoadState = 'loading' | 'success' | 'error';
 type FilterKey = 'all' | 'not-installed' | 'installed' | 'controller' | 'free';
 
 const PAGE_SIZE = 50;
@@ -96,7 +96,7 @@ export function InstallPage({
   const [installedIds, setInstalledIds] = useState<Set<number>>(new Set());
   const [collectionId, setCollectionId] = useState<string | number | null>(null);
   const [collectionReady, setCollectionReady] = useState(false);
-  const [loadState, setLoadState] = useState<LoadState>('idle');
+  const [loadState, setLoadState] = useState<LoadState>('loading');
   const [error, setError] = useState('');
   const [actionGameId, setActionGameId] = useState<number | null>(null);
   const [actionMessage, setActionMessage] = useState('');
@@ -104,10 +104,12 @@ export function InstallPage({
   const [sort, setSort] = useState<SortKey>('name');
   const [selectedGame, setSelectedGame] = useState<InstalledGame | null>(null);
   const [detailsLoading, setDetailsLoading] = useState(false);
+  const loadRequestId = useRef(0);
+  const detailsRequestId = useRef(0);
 
-  const refreshInstalled = useCallback(async () => {
-    const installed = uniqueGames((await getInstalledGames()).map(coerceGame));
-    setInstalledIds(new Set(installed.map((game) => game.id)));
+  useEffect(() => () => {
+    loadRequestId.current += 1;
+    detailsRequestId.current += 1;
   }, []);
 
   const resolveCollection = useCallback(async () => {
@@ -126,22 +128,29 @@ export function InstallPage({
 
   const loadGames = useCallback(async (searchText: string) => {
     if (!collectionReady) return;
+    const requestId = ++loadRequestId.current;
     setLoadState('loading');
     setError('');
     try {
       const catalogParams: Record<string, unknown> = { page: 1, paginate: PAGE_SIZE };
       if (collectionId !== null) catalogParams.collection = collectionId;
-      const rawGames = searchText.trim()
-        ? await searchCatalogGames({ name: searchText.trim() })
-        : await getCatalogGames(catalogParams);
+      const [rawGames, rawInstalledGames] = await Promise.all([
+        searchText.trim()
+          ? searchCatalogGames({ name: searchText.trim() })
+          : getCatalogGames(catalogParams),
+        getInstalledGames(),
+      ]);
+      if (loadRequestId.current !== requestId) return;
       setGames(uniqueGames(rawGames.map(coerceGame)));
-      await refreshInstalled();
+      const installed = uniqueGames(rawInstalledGames.map(coerceGame));
+      setInstalledIds(new Set(installed.map((game) => game.id)));
       setLoadState('success');
     } catch (err) {
+      if (loadRequestId.current !== requestId) return;
       setError(errorMessage(err, 'Could not load Boosteroid catalog games.'));
       setLoadState('error');
     }
-  }, [collectionId, collectionReady, refreshInstalled]);
+  }, [collectionId, collectionReady]);
 
   useEffect(() => {
     const handle = window.setTimeout(() => {
@@ -229,14 +238,23 @@ export function InstallPage({
   }, []);
 
   const openDetails = useCallback(async (game: InstalledGame) => {
+    const requestId = ++detailsRequestId.current;
     setSelectedGame(game);
     setDetailsLoading(true);
     try {
-      const details = await getGameDetails(game.id);
-      if (details) setSelectedGame({ ...game, ...details, id: game.id, name: details.name || game.name });
+      const details = await getGameDetails(game.id).catch(() => null);
+      if (details && detailsRequestId.current === requestId) {
+        setSelectedGame({ ...game, ...details, id: game.id, name: details.name || game.name });
+      }
     } finally {
-      setDetailsLoading(false);
+      if (detailsRequestId.current === requestId) setDetailsLoading(false);
     }
+  }, []);
+
+  const closeDetails = useCallback(() => {
+    detailsRequestId.current += 1;
+    setSelectedGame(null);
+    setDetailsLoading(false);
   }, []);
 
   return (
@@ -280,18 +298,20 @@ export function InstallPage({
               w={{ base: '100%', xs: 150 }}
             />
           </Group>
-          <Group gap="sm" wrap="nowrap">
-            <SegmentedControl
-              value={filter}
-              onChange={(value) => setFilter(value as FilterKey)}
-              data={[
-                { value: 'all', label: 'All' },
-                { value: 'not-installed', label: 'Available' },
-                { value: 'installed', label: 'Installed' },
-                { value: 'controller', label: 'Controller' },
-                { value: 'free', label: 'Free' },
-              ]}
-            />
+          <Group gap="sm" wrap="wrap" className="openstroid-catalog-actions">
+            <Box className="openstroid-filter-scroll">
+              <SegmentedControl
+                value={filter}
+                onChange={(value) => setFilter(value as FilterKey)}
+                data={[
+                  { value: 'all', label: 'All' },
+                  { value: 'not-installed', label: 'Available' },
+                  { value: 'installed', label: 'Installed' },
+                  { value: 'controller', label: 'Controller' },
+                  { value: 'free', label: 'Free' },
+                ]}
+              />
+            </Box>
             <Tooltip label="Refresh catalog">
               <ActionIcon variant="light" color="gray" size="lg" onClick={() => void loadGames(debouncedQuery)}>
                 <IconRefresh size={18} />
@@ -302,7 +322,7 @@ export function InstallPage({
 
         {loadState === 'loading' ? (
           <CatalogSkeleton />
-        ) : visibleGames.length === 0 ? (
+        ) : loadState === 'error' ? null : visibleGames.length === 0 ? (
           <EmptyCatalog title={emptyTitle} hasQuery={Boolean(query.trim())} onReset={() => setQuery('')} />
         ) : (
           <Box className="openstroid-game-grid">
@@ -326,7 +346,7 @@ export function InstallPage({
         installed={selectedGame ? installedIds.has(selectedGame.id) : false}
         isLoading={detailsLoading}
         isBusy={selectedGame ? actionGameId === selectedGame.id : false}
-        onClose={() => setSelectedGame(null)}
+        onClose={closeDetails}
         onInstall={handleInstall}
         onUninstall={handleUninstall}
         onLaunch={handleLaunch}
@@ -361,6 +381,7 @@ function CatalogCard({
       tabIndex={0}
       onClick={() => void onDetails(game)}
       onKeyDown={(event) => {
+        if (event.target !== event.currentTarget) return;
         if (event.key === 'Enter' || event.key === ' ') {
           event.preventDefault();
           void onDetails(game);

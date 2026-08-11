@@ -58,9 +58,9 @@ Download the latest build from [GitHub Releases](https://github.com/OpenCloudGam
 ## Development
 
 ```bash
-bun install
+npm install
 cp .env.example .env
-bun run dev
+npm run dev
 ```
 
 ### QR login
@@ -73,10 +73,10 @@ bun run dev
 
 | Command | Description |
 |---|---|
-| `bun run dev` | Launch the desktop app |
-| `bun run build` | Build the app |
-| `bun run start` | Run the built app |
-| `bun run lint` | Run ESLint |
+| `npm run dev` | Launch the desktop app |
+| `npm run build` | Build the app |
+| `npm run start` | Run the built app |
+| `npm run lint` | Run ESLint |
 
 ## Repository layout
 

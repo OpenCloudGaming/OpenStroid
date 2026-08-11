@@ -19,7 +19,7 @@ export function clearLegacyAuthStorage(): void {
   }
 }
 
-export function clearSessionHandoff(): void {
+function clearSessionHandoff(): void {
   writeSessionHandoff(null);
 }
 

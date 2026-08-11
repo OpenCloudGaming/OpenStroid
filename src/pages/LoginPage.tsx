@@ -136,6 +136,12 @@ export function LoginPage() {
     } catch (err) {
       const axiosErr = err as AxiosError<ApiError>;
       setServerError(axiosErr.response?.data?.message || 'Failed to read QR login status.');
+      const activeSession = qrSessionRef.current;
+      if (activeSession && !QR_TERMINAL_STATUSES.has(activeSession.status)) {
+        qrPollHandle.current = window.setTimeout(() => {
+          void pollQRCodeStatusRef.current(sessionId);
+        }, activeSession.pollIntervalMs || DEFAULT_QR_POLL_INTERVAL_MS);
+      }
     }
   }, [applyQRCodeSession, completeQrLogin, stopQRCodePolling]);
 

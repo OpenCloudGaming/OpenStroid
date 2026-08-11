@@ -213,9 +213,9 @@ jobs:
           path: |
             ${{ github.workspace }}/.cache/electron
             ${{ github.workspace }}/.cache/electron-builder
-          key: ${{ runner.os }}-electron-${{ hashFiles('package-lock.json') }}
+          key: ${{ matrix.label }}-electron-${{ hashFiles('package-lock.json') }}
           restore-keys: |
-            ${{ runner.os }}-electron-
+            ${{ matrix.label }}-electron-
 
       - name: Install Linux packaging packages
         if: runner.os == 'Linux'

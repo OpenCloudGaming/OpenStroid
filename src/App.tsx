@@ -1,9 +1,8 @@
 import '@mantine/core/styles.css';
 import '@mantine/notifications/styles.css';
-import './styles/settings.css';
-import './styles/settings-overrides.css';
 import './styles.css';
-import { MantineProvider } from '@mantine/core';
+import { lazy, Suspense } from 'react';
+import { Center, Loader, MantineProvider } from '@mantine/core';
 import { Notifications } from '@mantine/notifications';
 import { BrowserRouter, Routes, Route, Navigate, useLocation, useNavigate } from 'react-router-dom';
 import { theme } from './theme';
@@ -11,12 +10,13 @@ import { AuthProvider } from './auth';
 import { RequireAuth } from './components/RequireAuth';
 import { SettingsModalHost } from './components/SettingsModalHost';
 import { AuthenticatedLayout } from './layouts/AuthenticatedLayout';
-import { LoginPage } from './pages/LoginPage';
-import { MyGamesPage } from './pages/LibraryPage';
-import { LibraryCatalogPage } from './pages/LibraryCatalogPage';
-import { InstallPage } from './pages/InstallPage';
-import { SettingsPage } from './pages/SettingsPage';
-import { StreamPage } from './pages/StreamPage';
+
+const LoginPage = lazy(() => import('./pages/LoginPage').then((module) => ({ default: module.LoginPage })));
+const MyGamesPage = lazy(() => import('./pages/LibraryPage').then((module) => ({ default: module.MyGamesPage })));
+const LibraryCatalogPage = lazy(() => import('./pages/LibraryCatalogPage').then((module) => ({ default: module.LibraryCatalogPage })));
+const InstallPage = lazy(() => import('./pages/InstallPage').then((module) => ({ default: module.InstallPage })));
+const SettingsPage = lazy(() => import('./pages/SettingsPage').then((module) => ({ default: module.SettingsPage })));
+const StreamPage = lazy(() => import('./pages/StreamPage').then((module) => ({ default: module.StreamPage })));
 
 export default function App() {
   return (
@@ -24,7 +24,9 @@ export default function App() {
       <Notifications position="top-right" />
       <BrowserRouter>
         <AuthProvider>
-          <AppRoutes />
+          <Suspense fallback={<Center h="100vh"><Loader color="brand" type="dots" /></Center>}>
+            <AppRoutes />
+          </Suspense>
         </AuthProvider>
       </BrowserRouter>
     </MantineProvider>
@@ -48,7 +50,7 @@ function AppRoutes() {
 
   const closeSettings = () => {
     const returnPath = state?.backgroundPath;
-    navigate(returnPath && returnPath !== '/settings' ? returnPath : '/my-games');
+    navigate(returnPath && returnPath !== '/settings' ? returnPath : '/my-games', { replace: true });
   };
 
   return (

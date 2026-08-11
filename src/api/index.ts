@@ -1,26 +1,18 @@
-export { apiClient } from './client';
-export { API_CONFIG } from './config';
 export {
   startQRCodeLogin,
   getQRCodeLoginStatus,
   cancelQRCodeLogin,
   logout,
   getSession,
-  getCurrentUser,
   getInstalledGames,
-  getLibraryDashboard,
   getLibraryFacets,
   getCatalogGames,
   searchCatalogGames,
-  getNewGames,
   getGameDetails,
   installGame,
   uninstallGame,
   synchronizePlatform,
   launchStream,
   dequeueStreamSession,
-  getActiveStreamSessions,
-  getLastStreamSession,
   logStreamSession,
-  submitStreamSessionEvaluation,
 } from './endpoints';

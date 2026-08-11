@@ -48,6 +48,7 @@ import type { StreamLaunchResponse, StreamRealtimeStats } from '../types';
 function readFallbackLaunch(): StreamLaunchResponse | null {
   try {
     const raw = window.sessionStorage.getItem('openstroid:lastLaunch');
+    window.sessionStorage.removeItem('openstroid:lastLaunch');
     return raw ? (JSON.parse(raw) as StreamLaunchResponse) : null;
   } catch {
     return null;
@@ -112,7 +113,7 @@ export function StreamPage() {
     let disposed = false;
 
     async function loadLaunch() {
-      const payload = await window.openStroid?.getStreamLaunch?.();
+      const payload = await window.openStroid?.getStreamLaunch?.().catch(() => null);
       if (disposed) return;
       const nextLaunch = payload ?? readFallbackLaunch();
       setLaunch(nextLaunch);
@@ -243,6 +244,7 @@ export function StreamPage() {
   }, [appendLog]);
 
   const handleStop = useCallback(async () => {
+    window.sessionStorage.removeItem('openstroid:lastLaunch');
     await clientRef.current?.disconnect();
     await dequeueStreamSession().catch(() => undefined);
     navigate('/my-games');
@@ -450,33 +452,33 @@ function ControlBar({
     >
       <Group gap={6} wrap="nowrap">
         <Tooltip label={statsVisible ? 'Hide stats' : 'Show stats'}>
-          <ActionIcon variant={statsVisible ? 'filled' : 'subtle'} color="teal" size="lg" onClick={onToggleStats}>
+          <ActionIcon aria-label={statsVisible ? 'Hide stream stats' : 'Show stream stats'} aria-pressed={statsVisible} variant={statsVisible ? 'filled' : 'subtle'} color="teal" size="lg" onClick={onToggleStats}>
             <IconChartBar size={18} />
           </ActionIcon>
         </Tooltip>
         <Tooltip label={muted ? 'Unmute' : 'Mute'}>
-          <ActionIcon variant="subtle" color={muted ? 'red' : 'gray'} size="lg" onClick={onToggleMute}>
+          <ActionIcon aria-label={muted ? 'Unmute stream' : 'Mute stream'} aria-pressed={muted} variant="subtle" color={muted ? 'red' : 'gray'} size="lg" onClick={onToggleMute}>
             {muted ? <IconVolumeOff size={18} /> : <IconVolume size={18} />}
           </ActionIcon>
         </Tooltip>
         <Divider orientation="vertical" />
         <Tooltip label="Stream settings">
-          <ActionIcon variant="subtle" color="gray" size="lg" onClick={onOpenSettings}>
+          <ActionIcon aria-label="Open stream settings" variant="subtle" color="gray" size="lg" onClick={onOpenSettings}>
             <IconSettings size={18} />
           </ActionIcon>
         </Tooltip>
         <Tooltip label="Reconnect">
-          <ActionIcon variant="subtle" color="gray" size="lg" onClick={onReconnect}>
+          <ActionIcon aria-label="Reconnect stream" variant="subtle" color="gray" size="lg" onClick={onReconnect}>
             <IconRefresh size={18} />
           </ActionIcon>
         </Tooltip>
         <Tooltip label="Fullscreen">
-          <ActionIcon variant="subtle" color="gray" size="lg" onClick={onFullscreen}>
+          <ActionIcon aria-label="Enter fullscreen" variant="subtle" color="gray" size="lg" onClick={onFullscreen}>
             <IconMaximize size={18} />
           </ActionIcon>
         </Tooltip>
         <Tooltip label="Stop session">
-          <ActionIcon variant="filled" color="red" size="lg" onClick={onStop}>
+          <ActionIcon aria-label="Stop stream" variant="filled" color="red" size="lg" onClick={onStop}>
             <IconPlayerStop size={18} />
           </ActionIcon>
         </Tooltip>
@@ -601,7 +603,7 @@ function SettingsDrawer({
           thumbIcon={micEnabled ? <IconMicrophone size={12} /> : <IconMicrophoneOff size={12} />}
         />
         <Tooltip label="Paste clipboard into the remote session">
-          <ActionIcon variant="light" color="gray" size="lg" onClick={onPaste}>
+          <ActionIcon aria-label="Paste clipboard into stream" variant="light" color="gray" size="lg" onClick={onPaste}>
             <IconClipboard size={18} />
           </ActionIcon>
         </Tooltip>
