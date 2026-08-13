@@ -2,11 +2,18 @@ import type { AddressInfo } from 'node:net';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
-import { app, BrowserWindow, ipcMain, nativeImage, session, shell } from 'electron';
+import { app, BrowserWindow, ipcMain, nativeImage, safeStorage, session, shell } from 'electron';
+import { EncryptedAuthSessionStore, linuxPasswordStore } from './authSessionStore.js';
+import { registerAuthSessionIpc } from './authSessionIpc.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const preloadPath = path.join(__dirname, 'preload.cjs');
+
+const passwordStore = process.platform === 'linux' ? linuxPasswordStore(process.env) : null;
+if (passwordStore) {
+  app.commandLine.appendSwitch('password-store', passwordStore);
+}
 
 let bridgePort = 3001;
 const pendingStreamLaunches = new Map<string, StreamLaunchPayload>();
@@ -150,6 +157,10 @@ function createMainWindow() {
 async function bootstrapDesktopApp() {
   const { startBridgeServer } = await import('../server/app.js');
   const { serverConfig } = await import('../server/config.js');
+  const authSessionStore = new EncryptedAuthSessionStore(
+    path.join(app.getPath('userData'), 'auth-session.bin'),
+    safeStorage,
+  );
 
   bridgePort = serverConfig.port;
   const server = await startBridgeServer(serverConfig.port);
@@ -160,6 +171,7 @@ async function bootstrapDesktopApp() {
 
   createMainWindow();
   registerIpcHandlers();
+  registerAuthSessionIpc(ipcMain, authSessionStore);
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {

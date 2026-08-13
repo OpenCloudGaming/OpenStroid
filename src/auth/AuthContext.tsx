@@ -44,7 +44,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       applySession(session.user);
       return session.authenticated || Boolean(session.user);
     } catch {
-      clearAuthStorage();
+      await clearAuthStorage();
       applySession(null);
       return false;
     }
@@ -59,8 +59,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     const handleUnauthorized = () => {
-      clearAuthStorage();
-      applySession(null);
+      void clearAuthStorage().finally(() => applySession(null));
     };
 
     window.addEventListener('openstroid:unauthorized', handleUnauthorized);
@@ -73,7 +72,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     try {
       await api.logout();
     } finally {
-      clearAuthStorage();
+      await clearAuthStorage();
       applySession(null);
     }
   }, [applySession]);
