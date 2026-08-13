@@ -10,10 +10,10 @@ import type {
   User,
 } from '../types';
 
-function extractSession(data: Record<string, unknown>): AuthSession {
+async function extractSession(data: Record<string, unknown>): Promise<AuthSession> {
   const sessionHandoff = typeof data.sessionHandoff === 'string' ? data.sessionHandoff : null;
   if (sessionHandoff) {
-    writeSessionHandoff(sessionHandoff);
+    await writeSessionHandoff(sessionHandoff);
   }
 
   return {

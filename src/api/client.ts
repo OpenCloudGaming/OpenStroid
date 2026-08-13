@@ -12,8 +12,8 @@ export const apiClient = axios.create({
   timeout: 15000,
 });
 
-apiClient.interceptors.request.use((config) => {
-  const handoff = readSessionHandoff();
+apiClient.interceptors.request.use(async (config) => {
+  const handoff = await readSessionHandoff();
   if (handoff) {
     config.headers.set('X-OpenStroid-Session', handoff);
   }
