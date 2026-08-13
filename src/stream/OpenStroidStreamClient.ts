@@ -1798,6 +1798,7 @@ export class OpenStroidStreamClient {
   }
 
   private inspectDecodedColorSpace() {
+    this.decodedColorSpace = undefined;
     if (!('VideoFrame' in window)) {
       this.log('Decoded color metadata unavailable; negotiated clientColorMode=SDR');
       return;
