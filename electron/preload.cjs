@@ -8,6 +8,8 @@ function installLocalStorageState(state = {}) {
 }
 
 contextBridge.exposeInMainWorld('openStroid', {
+  readSessionHandoff: () => ipcRenderer.invoke('openstroid:auth-session:read'),
+  writeSessionHandoff: (value) => ipcRenderer.invoke('openstroid:auth-session:write', value),
   openStream: (launch) => ipcRenderer.invoke('openstroid:open-stream', launch),
   getStreamLaunch: async () => {
     const launch = await ipcRenderer.invoke('openstroid:get-stream-launch');

@@ -82,7 +82,7 @@ export function LoginPage() {
 
   const completeQrLogin = useCallback(async (session: QRCodeLoginSessionStatus): Promise<boolean> => {
     if (session.sessionHandoff) {
-      writeSessionHandoff(session.sessionHandoff);
+      await writeSessionHandoff(session.sessionHandoff);
     }
 
     for (let attempt = 0; attempt < 3; attempt += 1) {
