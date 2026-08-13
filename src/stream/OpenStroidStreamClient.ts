@@ -66,9 +66,17 @@ interface StreamRuntimeSettings {
   encoding: StreamEncodingPreset;
   fsrEnabled: boolean;
   microphoneEnabled: boolean;
-  hdrEnabled: boolean;
   fillerEnabled: boolean;
   quality: StreamQualityPreset;
+}
+
+interface GatewayStatusParamsInput {
+  maxFramerate: number;
+  maxBitrate: number;
+  cursorZip: boolean;
+  filler: boolean;
+  networkType: string;
+  codec: StreamVideoCodec;
 }
 
 interface VideoSurfaceMetrics {
@@ -173,6 +181,32 @@ function parseJson(value: string) {
 function connectionType() {
   const connection = (navigator as Navigator & { connection?: { effectiveType?: string } }).connection;
   return connection?.effectiveType ?? 'unknown';
+}
+
+export function buildGatewayStatusParams({
+  maxFramerate,
+  maxBitrate,
+  cursorZip,
+  filler,
+  networkType,
+  codec,
+}: GatewayStatusParamsInput) {
+  return {
+    type: 'web',
+    ver: 'openstroid',
+    gpu: 'unknown',
+    proto: 1,
+    framerate_max: maxFramerate,
+    bitrate_max: maxBitrate,
+    hdr: false,
+    cursor_zip: cursorZip,
+    filler,
+    beta: 0,
+    rtcEngine: 'webrtc',
+    rtcAudio: 'pcm',
+    network_type: networkType,
+    ...(codec === 'av1' ? { codec: 'av1' } : {}),
+  };
 }
 
 let av1SupportPromise: Promise<boolean> | null = null;
@@ -430,6 +464,7 @@ export class OpenStroidStreamClient {
   private preferredCodec: StreamEncodingPreset = 'h264';
   private activeCodec: StreamVideoCodec = 'h264';
   private gatewayCodec = '';
+  private decodedColorSpace: StreamRealtimeStats['colorSpace'];
   private gateways: unknown[] = [];
   private remoteIceTimer: number | null = null;
   private remoteIcePollingGeneration = 0;
@@ -485,7 +520,6 @@ export class OpenStroidStreamClient {
     encoding: 'h264',
     fsrEnabled: false,
     microphoneEnabled: false,
-    hdrEnabled: false,
     fillerEnabled: false,
     quality: 'auto',
   };
@@ -777,12 +811,12 @@ export class OpenStroidStreamClient {
         ? message.value as Record<string, unknown>
         : {};
       if (typeof value.codec === 'string') this.gatewayCodec = value.codec;
-      if (typeof value.hdr === 'boolean') this.runtimeSettings.hdrEnabled = value.hdr;
       if (typeof value.framerate === 'number') {
         this.runtimeSettings.maxFramerate = value.framerate >= 120 ? 120 : 60;
       }
       if (typeof value.fsr === 'boolean') this.runtimeSettings.fsrEnabled = value.fsr;
-      this.log(`Gateway status updated codec=${this.gatewayCodec || 'unknown'} fps=${this.runtimeSettings.maxFramerate}`);
+      const gatewayHdr = typeof value.hdr === 'boolean' ? value.hdr : false;
+      this.log(`Gateway status updated codec=${this.gatewayCodec || 'unknown'} fps=${this.runtimeSettings.maxFramerate} gatewayHdr=${gatewayHdr} clientColorMode=SDR`);
       return;
     }
 
@@ -1674,6 +1708,7 @@ export class OpenStroidStreamClient {
         this.invalidateVideoSurfaceMetrics();
         void this.videoElement.play().then(() => {
           this.log(`Video playback started readyState=${this.videoElement.readyState}`);
+          this.inspectDecodedColorSpace();
         }).catch((error: unknown) => {
           this.log(`Video play failed: ${error instanceof Error ? error.message : String(error)}`);
         });
@@ -1762,6 +1797,29 @@ export class OpenStroidStreamClient {
       .replace(/a=extmap:\d+ urn:3gpp:video-orientation\r\n/g, '');
   }
 
+  private inspectDecodedColorSpace() {
+    if (!('VideoFrame' in window)) {
+      this.log('Decoded color metadata unavailable; negotiated clientColorMode=SDR');
+      return;
+    }
+
+    try {
+      const frame = new VideoFrame(this.videoElement);
+      const colorSpace = frame.colorSpace;
+      this.decodedColorSpace = {
+        primaries: colorSpace.primaries,
+        transfer: colorSpace.transfer,
+        matrix: colorSpace.matrix,
+        fullRange: colorSpace.fullRange,
+      };
+      const format = frame.format;
+      frame.close();
+      this.log(`Decoded video format=${format ?? 'unknown'} colorPrimaries=${colorSpace.primaries ?? 'unknown'} transfer=${colorSpace.transfer ?? 'unknown'} matrix=${colorSpace.matrix ?? 'unknown'} range=${colorSpace.fullRange === null ? 'unknown' : colorSpace.fullRange ? 'full' : 'limited'} clientColorMode=SDR`);
+    } catch (error) {
+      this.log(`Decoded color metadata unavailable: ${error instanceof Error ? error.message : String(error)}; negotiated clientColorMode=SDR`);
+    }
+  }
+
   private async fetchGatewayCodec() {
     const url = `${this.webrtcApiBase}/api/getParams?sessionId=${encodeURIComponent(this.sessionId)}`;
     try {
@@ -1785,22 +1843,14 @@ export class OpenStroidStreamClient {
       type: 'stream',
       action: 'status',
       value: 'ok',
-      params: {
-        type: 'web',
-        ver: 'openstroid',
-        gpu: 'unknown',
-        proto: 1,
-        framerate_max: maxFramerate,
-        bitrate_max: maxBitrate,
-        hdr: this.runtimeSettings.hdrEnabled,
-        cursor_zip: 'CompressionStream' in window,
+      params: buildGatewayStatusParams({
+        maxFramerate,
+        maxBitrate,
+        cursorZip: 'CompressionStream' in window,
         filler: this.runtimeSettings.fillerEnabled,
-        beta: 0,
-        rtcEngine: 'webrtc',
-        rtcAudio: 'pcm',
-        network_type: connectionType(),
-        ...(this.activeCodec === 'av1' ? { codec: 'av1' } : {}),
-      },
+        networkType: connectionType(),
+        codec: this.activeCodec,
+      }),
     });
     this.sendEvent({ type: 'stream', action: 'refreshRate', value: maxFramerate });
     if (this.runtimeSettings.fsrEnabled) {
@@ -1973,6 +2023,8 @@ export class OpenStroidStreamClient {
         connectionState: this.pc?.connectionState ?? 'unknown',
         gatewayHost: this.gatewayHost,
         codec: this.gatewayCodec || this.activeCodec,
+        colorMode: 'SDR',
+        colorSpace: this.decodedColorSpace,
         at: Date.now(),
       });
       this.statsPrev = { timestamp: report.timestamp, bytesReceived, framesDecoded, framesReceived, packetsReceived, packetsLost };

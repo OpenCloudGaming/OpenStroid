@@ -17,6 +17,7 @@
     "build": "tsc -b && tsc -p tsconfig.server.json && tsc -p tsconfig.electron.json && vite build",
     "dist": "npm run build && electron-builder",
     "lint": "eslint .",
+    "test:stream-color": "tsx tools/stream-color.test.ts",
     "test:ui": "node tools/ui-smoke.mjs",
     "preview": "vite preview",
     "start": "electron build/electron/electron/main.js",
