@@ -97,6 +97,13 @@ export interface StreamRealtimeStats {
   connectionState: RTCPeerConnectionState | 'unknown';
   gatewayHost: string;
   codec?: string;
+  colorMode: 'SDR';
+  colorSpace?: {
+    primaries: string | null;
+    transfer: string | null;
+    matrix: string | null;
+    fullRange: boolean | null;
+  };
   at: number;
 }
 

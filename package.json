@@ -18,6 +18,7 @@
     "dist": "npm run build && electron-builder",
     "lint": "eslint .",
     "test": "node --import tsx --test electron/*.test.ts",
+    "test:stream-color": "tsx tools/stream-color.test.ts",
     "test:ui": "node tools/ui-smoke.mjs",
     "preview": "vite preview",
     "start": "electron build/electron/electron/main.js",

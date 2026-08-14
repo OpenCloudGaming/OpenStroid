@@ -56,5 +56,8 @@ jobs:
       - name: Build
         run: npm run build
 
+      - name: Test stream color negotiation
+        run: npm run test:stream-color
+
       - name: Test UI
         run: npm run test:ui

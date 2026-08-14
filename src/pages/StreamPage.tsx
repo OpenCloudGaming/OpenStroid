@@ -355,6 +355,10 @@ function TopStatus({
 function StatsPanel({ stats, maxBitrate }: { stats: StreamRealtimeStats | null; maxBitrate: number }) {
   const bitrate = stats?.bitrate ?? 0;
   const bitratePercent = Math.min(100, Math.round((bitrate / Math.max(maxBitrate * 1_000_000, 1)) * 100));
+  const colorSpace = stats?.colorSpace;
+  const colorDescription = colorSpace
+    ? `${colorSpace.primaries ?? 'unknown'} / ${colorSpace.transfer ?? 'unknown'} / ${colorSpace.matrix ?? 'unknown'} / ${colorSpace.fullRange === null ? 'unknown range' : colorSpace.fullRange ? 'full' : 'limited'}`
+    : 'Waiting for frame metadata';
 
   return (
     <Paper
@@ -384,6 +388,11 @@ function StatsPanel({ stats, maxBitrate }: { stats: StreamRealtimeStats | null; 
           <Text size="xs" c="dimmed">Packet loss</Text>
           <Text size="xs" fw={700}>{stats?.packetLoss ?? 0}%</Text>
         </Group>
+        <Group justify="space-between">
+          <Text size="xs" c="dimmed">Color mode</Text>
+          <Text size="xs" fw={700}>{stats?.colorMode ?? 'SDR'}</Text>
+        </Group>
+        <Text size="xs" c="dimmed" lineClamp={1}>{colorDescription}</Text>
         <Text size="xs" c="dimmed" lineClamp={1}>{stats?.gatewayHost || 'Waiting for gateway'}</Text>
       </Stack>
     </Paper>
