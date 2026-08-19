@@ -10,6 +10,10 @@ const distPath = path.join(electronDir, 'dist');
 const pathFile = path.join(electronDir, 'path.txt');
 const platformPath = getPlatformPath();
 
+function isTruthy(value) {
+  return /^(1|true|yes)$/i.test(value ?? '');
+}
+
 function getPlatformPath() {
   const platform = process.env.npm_config_platform || process.platform;
 
@@ -66,6 +70,14 @@ async function extractZip(zipPath, destination) {
 }
 
 (async () => {
+  if (
+    isTruthy(process.env.ELECTRON_SKIP_BINARY_DOWNLOAD) ||
+    isTruthy(process.env.npm_config_electron_skip_binary_download)
+  ) {
+    console.log('Skipping Electron binary install because Electron binary downloads are disabled.');
+    return;
+  }
+
   if (isInstalled()) {
     return;
   }
